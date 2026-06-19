@@ -64,49 +64,53 @@ it fits into scripts and Makefiles just as well as interactive use.
 
 dev-secrets is a single self-contained binary called `devsecrets`.
 
-### Requirements
-
-- [Rust](https://rustup.rs/) **1.74 or newer** (stable). That's the only
-  build dependency — no system libraries required.
-
-### Option 1 — Homebrew (macOS / Linux)
-
-A formula lives in [`Formula/devsecrets.rb`](Formula/devsecrets.rb). Until
-tagged-release bottles are published it builds the latest from `main`:
+### Homebrew (recommended — macOS / Linux)
 
 ```sh
-brew install --HEAD https://raw.githubusercontent.com/peterkracik/localenvs/main/Formula/devsecrets.rb
+brew install peterkracik/tap/devsecrets
 ```
 
-Once the formula is published to a tap (e.g. `peterkracik/homebrew-tap`) this
-becomes simply `brew install peterkracik/tap/devsecrets`.
-
-### Option 2 — install from source with Cargo (recommended)
+…which is shorthand for:
 
 ```sh
-git clone https://github.com/peterkracik/localenvs.git
-cd localenvs
-cargo install --path .
+brew tap peterkracik/tap
+brew install devsecrets
 ```
 
-This builds an optimized binary and places `devsecrets` in
-`~/.cargo/bin` (make sure that directory is on your `PATH`).
+Upgrade later with `brew upgrade devsecrets`.
 
-### Option 3 — install directly from Git
+### Download a prebuilt binary
+
+Grab the archive for your platform from the
+[**Releases**](https://github.com/peterkracik/localenvs/releases) page (built
+automatically by CI), or pull the latest release from the command line:
+
+```sh
+# Linux (x86_64)
+curl -L https://github.com/peterkracik/localenvs/releases/latest/download/devsecrets-x86_64-unknown-linux-gnu.tar.gz | tar xz
+sudo install devsecrets-x86_64-unknown-linux-gnu/devsecrets /usr/local/bin/
+
+# macOS (Apple Silicon)
+curl -L https://github.com/peterkracik/localenvs/releases/latest/download/devsecrets-aarch64-apple-darwin.tar.gz | tar xz
+sudo install devsecrets-aarch64-apple-darwin/devsecrets /usr/local/bin/
+```
+
+Available targets: `x86_64-unknown-linux-gnu`, `aarch64-apple-darwin`,
+`x86_64-apple-darwin`, and `x86_64-pc-windows-msvc` (`.zip`).
+
+### Build from source
+
+Requires [Rust](https://rustup.rs/) **1.74+** (the only build dependency — no
+system libraries needed).
 
 ```sh
 cargo install --git https://github.com/peterkracik/localenvs.git
+# or, from a clone:
+git clone https://github.com/peterkracik/localenvs.git && cd localenvs
+cargo install --path .
 ```
 
-### Option 4 — build a release binary manually
-
-```sh
-git clone https://github.com/peterkracik/localenvs.git
-cd localenvs
-cargo build --release
-# binary is at ./target/release/devsecrets — copy it anywhere on your PATH:
-sudo cp target/release/devsecrets /usr/local/bin/
-```
+This places `devsecrets` in `~/.cargo/bin` (ensure it's on your `PATH`).
 
 ### Verify
 
@@ -265,7 +269,7 @@ environments. Opening an environment drills into its **Secrets** screen.
 | `d`             | Delete the selected project / env / secret (confirm)  |
 | `y`             | Duplicate the selected environment                    |
 | `i`             | Import a `.env` file into the selected environment    |
-| `x`             | Export the selected env (then pick a format)          |
+| `x`             | Export the selected env (path + format in one dialog) |
 | `D`             | Set the selected environment as the project default   |
 | `f`             | Assign the current folder to this project/env         |
 | `s`             | Toggle showing / hiding secret values                 |
@@ -359,7 +363,8 @@ devsecrets secret delete -p <project> -e <env> <KEY>
 **Value types.** Each secret has a type — `text` (default), `number`, or
 `json` — which is validated on set. `--type number` rejects non-numbers and
 `--type json` rejects invalid JSON. In the TUI, the new-secret form has a Type
-field (`←/→` to change).
+field (`←/→` to change), and a `json` value is pretty-printed in the preview
+when revealed (`s`).
 
 ### Import & export
 
@@ -564,10 +569,17 @@ only records a folder → project/env assignment so you can drop the
 
 ```sh
 cargo build         # debug build
-cargo test          # run unit tests
+cargo test          # unit + integration tests (tests/cli.rs drives the binary)
 cargo clippy        # lints
 cargo fmt           # format
 ```
+
+CI (GitHub Actions) runs fmt, clippy, and the unit + integration tests on every
+push/PR (`.github/workflows/ci.yml`). On pushes to `main` and on `v*` tags,
+`.github/workflows/release.yml` cross-builds binaries for Linux, macOS
+(Intel + Apple Silicon), and Windows, uploads them as build artifacts, and — for
+tags — attaches them to a GitHub Release. The Homebrew tap formula is
+[`Formula/devsecrets.rb`](Formula/devsecrets.rb).
 
 Contributions and issues are welcome.
 

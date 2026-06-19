@@ -23,6 +23,26 @@ pub enum Format {
     Toml,
 }
 
+impl Format {
+    pub fn label(self) -> &'static str {
+        match self {
+            Format::Env => "env",
+            Format::Shell => "shell",
+            Format::Json => "json",
+            Format::Toml => "toml",
+        }
+    }
+
+    pub fn next(self) -> Format {
+        match self {
+            Format::Env => Format::Shell,
+            Format::Shell => Format::Json,
+            Format::Json => Format::Toml,
+            Format::Toml => Format::Env,
+        }
+    }
+}
+
 #[derive(Parser, Debug)]
 #[command(
     name = "devsecrets",

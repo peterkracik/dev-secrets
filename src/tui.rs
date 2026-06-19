@@ -52,7 +52,6 @@ enum InputAction {
     EditSecret { key: String },
     DuplicateEnv { from: String },
     Import,
-    Export,
 }
 
 struct InputState {
@@ -94,6 +93,20 @@ struct KvInputState {
     value: String,
     kind: Kind,
     active: KvField,
+}
+
+/// Which field of the export form is active.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum ExportField {
+    Path,
+    Format,
+}
+
+/// Single-screen export form: an output path plus a format selector.
+struct ExportForm {
+    path: String,
+    format: Format,
+    active: ExportField,
 }
 
 /// What a confirmation prompt should do when accepted.
@@ -264,8 +277,8 @@ pub struct App {
     import_choice: Option<String>,
     /// Active per-key import confirmation session, if any.
     import_session: Option<ImportSession>,
-    /// Output path awaiting an export-format choice, if any.
-    export_choice: Option<String>,
+    /// Active export form (path + format selector), if any.
+    export_form: Option<ExportForm>,
     /// Active in-app full-environment editor, if any.
     editor: Option<EnvEditor>,
     /// Set when the user asks to edit the current environment in `$EDITOR`.
@@ -309,7 +322,7 @@ impl App {
             confirm: None,
             import_choice: None,
             import_session: None,
-            export_choice: None,
+            export_form: None,
             editor: None,
             pending_editor: false,
             should_quit: false,
@@ -462,8 +475,8 @@ impl App {
         if self.import_session.is_some() {
             return self.on_import_session_key(key);
         }
-        if self.export_choice.is_some() {
-            return self.on_export_choice_key(key);
+        if self.export_form.is_some() {
+            return self.on_export_key(key);
         }
         if self.show_help {
             self.show_help = false;
@@ -1100,11 +1113,10 @@ impl App {
         if !self.require_selected_env() {
             return;
         }
-        self.input = Some(InputState {
-            title: "Export .env".into(),
-            prompt: "Output path:".into(),
-            buffer: ".env".into(),
-            action: InputAction::Export,
+        self.export_form = Some(ExportForm {
+            path: ".env".into(),
+            format: Format::Env,
+            active: ExportField::Path,
         });
     }
 
@@ -1454,10 +1466,6 @@ impl App {
                 // Defer until the user picks merge vs replace.
                 self.import_choice = Some(value);
             }
-            InputAction::Export => {
-                // Defer until the user picks a format.
-                self.export_choice = Some(value);
-            }
         }
         self.clamp_indices();
         Ok(())
@@ -1636,25 +1644,44 @@ impl App {
         }
     }
 
-    /// Keys for the export-format chooser.
-    fn on_export_choice_key(&mut self, key: KeyEvent) -> Result<()> {
-        let fmt = match key.code {
-            KeyCode::Char('e') | KeyCode::Enter => Some(Format::Env),
-            KeyCode::Char('s') => Some(Format::Shell),
-            KeyCode::Char('j') => Some(Format::Json),
-            KeyCode::Char('t') => Some(Format::Toml),
-            _ => None,
+    /// Keys for the export form (path field + format selector).
+    fn on_export_key(&mut self, key: KeyEvent) -> Result<()> {
+        let Some(form) = self.export_form.as_mut() else {
+            return Ok(());
         };
-        match fmt {
-            Some(fmt) => {
-                if let Some(path) = self.export_choice.take() {
-                    self.do_export(&path, fmt);
+        match key.code {
+            KeyCode::Esc => {
+                self.export_form = None;
+            }
+            KeyCode::Tab | KeyCode::Down => {
+                form.active = match form.active {
+                    ExportField::Path => ExportField::Format,
+                    ExportField::Format => ExportField::Path,
+                };
+            }
+            KeyCode::Up => {
+                form.active = match form.active {
+                    ExportField::Path => ExportField::Format,
+                    ExportField::Format => ExportField::Path,
+                };
+            }
+            KeyCode::Left | KeyCode::Right if form.active == ExportField::Format => {
+                form.format = form.format.next();
+            }
+            KeyCode::Enter => match form.active {
+                ExportField::Path => form.active = ExportField::Format,
+                ExportField::Format => {
+                    let form = self.export_form.take().unwrap();
+                    self.do_export(&form.path, form.format);
                 }
+            },
+            KeyCode::Backspace if form.active == ExportField::Path => {
+                form.path.pop();
             }
-            None => {
-                self.export_choice = None;
-                self.status = "Export cancelled.".into();
+            KeyCode::Char(c) if form.active == ExportField::Path => {
+                form.path.push(c);
             }
+            _ => {}
         }
         Ok(())
     }
@@ -1894,38 +1921,65 @@ impl App {
         if let Some(session) = &self.import_session {
             self.draw_import_session(f, session);
         }
-        if let Some(path) = &self.export_choice {
-            self.draw_export_choice(f, path);
+        if let Some(form) = &self.export_form {
+            self.draw_export_form(f, form);
         }
         if let Some(editor) = &self.editor {
             self.draw_editor(f, editor);
         }
     }
 
-    fn draw_export_choice(&self, f: &mut Frame, path: &str) {
-        let area = centered_rect(64, 9, f.area());
+    fn draw_export_form(&self, f: &mut Frame, form: &ExportForm) {
+        let area = centered_rect(60, 6, f.area());
         f.render_widget(Clear, area);
         let block = Block::default()
             .borders(Borders::ALL)
             .border_style(Style::default().fg(ACCENT))
-            .title(" Export — choose format ");
-        let inner = Paragraph::new(vec![
-            Line::from(Span::styled(
-                format!("To {path}"),
-                Style::default().fg(Color::Gray),
-            )),
-            Line::from(""),
-            Line::from("  e  .env       KEY=VALUE"),
-            Line::from("  s  shell      export KEY=VALUE"),
-            Line::from("  j  json       { \"KEY\": \"VALUE\" }"),
-            Line::from("  t  toml       KEY = \"VALUE\""),
-            Line::from(Span::styled(
-                "  Enter = env   ·   Esc cancel",
-                Style::default().fg(Color::DarkGray),
-            )),
-        ])
-        .block(block)
-        .wrap(Wrap { trim: false });
+            .title(" Export ")
+            .title_bottom(" Tab: field   ←/→: format   Enter: export   Esc: cancel ");
+
+        let path_active = form.active == ExportField::Path;
+        let path_label_style = if path_active {
+            Style::default()
+                .fg(Color::Cyan)
+                .add_modifier(Modifier::BOLD)
+        } else {
+            Style::default().fg(Color::Gray)
+        };
+        let cursor = if path_active { "_" } else { "" };
+        let path_line = Line::from(vec![
+            Span::styled(format!("{:<8}", "Path:"), path_label_style),
+            Span::styled(
+                format!("{}{cursor}", form.path),
+                Style::default().fg(Color::White),
+            ),
+        ]);
+
+        let fmt_active = form.active == ExportField::Format;
+        let fmt_label_style = if fmt_active {
+            Style::default()
+                .fg(Color::Cyan)
+                .add_modifier(Modifier::BOLD)
+        } else {
+            Style::default().fg(Color::Gray)
+        };
+        let mut fmt_spans = vec![Span::styled(format!("{:<8}", "Format:"), fmt_label_style)];
+        for fmt in [Format::Env, Format::Shell, Format::Json, Format::Toml] {
+            let style = if fmt == form.format {
+                Style::default()
+                    .fg(Color::Black)
+                    .bg(ACCENT)
+                    .add_modifier(Modifier::BOLD)
+            } else {
+                Style::default().fg(Color::DarkGray)
+            };
+            fmt_spans.push(Span::styled(format!(" {} ", fmt.label()), style));
+            fmt_spans.push(Span::raw(" "));
+        }
+
+        let inner = Paragraph::new(vec![path_line, Line::from(fmt_spans)])
+            .block(block)
+            .wrap(Wrap { trim: false });
         f.render_widget(inner, area);
     }
 
@@ -2335,9 +2389,35 @@ impl App {
             )),
             Line::from(""),
         ];
-        let mut value_line = vec![Span::styled("value: ", Style::default().fg(Color::Gray))];
-        value_line.extend(value_spans(&raw, self.reveal));
-        lines.push(Line::from(value_line));
+        // When revealed, pretty-print JSON values across multiple lines.
+        let pretty = if self.reveal && !is_reference(&raw) {
+            serde_json::from_str::<serde_json::Value>(&raw)
+                .ok()
+                .filter(|_| kind == Kind::Json || raw.trim_start().starts_with(['{', '[']))
+                .and_then(|v| serde_json::to_string_pretty(&v).ok())
+        } else {
+            None
+        };
+        match pretty {
+            Some(p) => {
+                lines.push(Line::from(Span::styled(
+                    "value:",
+                    Style::default().fg(Color::Gray),
+                )));
+                for l in p.lines() {
+                    lines.push(Line::from(Span::styled(
+                        format!("  {l}"),
+                        Style::default().fg(Color::White),
+                    )));
+                }
+            }
+            None => {
+                let mut value_line =
+                    vec![Span::styled("value: ", Style::default().fg(Color::Gray))];
+                value_line.extend(value_spans(&raw, self.reveal));
+                lines.push(Line::from(value_line));
+            }
+        }
         // If the value contains references, show the resolved result too.
         if is_reference(&raw) {
             match resolve::resolve_at(&self.handle.store, &project, &env, &key) {

@@ -1,17 +1,18 @@
 # Homebrew formula for dev-secrets.
 #
-# Until tagged release bottles are published, this installs the latest from
-# the main branch and builds from source:
+# This is the canonical formula. To publish the tap, copy this file into a
+# repo named `peterkracik/homebrew-tap` (path `Formula/devsecrets.rb`). Then:
 #
-#   brew install --HEAD https://raw.githubusercontent.com/peterkracik/localenvs/main/Formula/devsecrets.rb
+#   brew install peterkracik/tap/devsecrets
 #
-# Or, once dropped into a tap (e.g. peterkracik/homebrew-tap):
-#
-#   brew install --HEAD peterkracik/tap/devsecrets
-#
+# It builds from the tagged source with the Rust toolchain. Bump `url`'s tag
+# (and `version`) on each release. For a no-build install, download a prebuilt
+# binary from the GitHub Releases page instead.
 class Devsecrets < Formula
   desc "Telescope-style TUI and CLI for managing local development secrets"
   homepage "https://github.com/peterkracik/localenvs"
+  version "0.1.0"
+  url "https://github.com/peterkracik/localenvs.git", tag: "v#{version}"
   license "MIT"
   head "https://github.com/peterkracik/localenvs.git", branch: "main"
 
