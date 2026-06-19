@@ -74,6 +74,9 @@ pub struct App {
     status: String,
     input: Option<InputState>,
     confirm: Option<ConfirmState>,
+    /// Set when the user asks to edit the current environment in `$EDITOR`.
+    /// Handled in the main loop (where the terminal can be suspended).
+    pending_editor: bool,
     should_quit: bool,
 }
 
@@ -100,6 +103,7 @@ impl App {
             status: "Welcome to dev-secrets. Press ? for help.".to_string(),
             input: None,
             confirm: None,
+            pending_editor: false,
             should_quit: false,
         }
     }
@@ -111,6 +115,10 @@ impl App {
                 if key.kind == KeyEventKind::Press {
                     self.on_key(key)?;
                 }
+            }
+            if self.pending_editor {
+                self.pending_editor = false;
+                self.edit_env_in_editor(terminal)?;
             }
         }
         Ok(())
@@ -210,6 +218,7 @@ impl App {
             (KeyCode::Enter, _) => self.on_enter(),
             (KeyCode::Char('n'), _) => self.start_new(),
             (KeyCode::Char('e'), _) => self.start_edit_secret(),
+            (KeyCode::Char('E'), _) => self.request_edit_env(),
             (KeyCode::Char('d'), _) => self.start_delete(),
             (KeyCode::Char('y'), _) => self.start_duplicate(),
             (KeyCode::Char('i'), _) => self.start_import(),
@@ -339,6 +348,16 @@ impl App {
             buffer: current,
             action: InputAction::EditSecret { key },
         });
+    }
+
+    /// Flag that the current environment should be opened in `$EDITOR`. The
+    /// actual launch happens back in the main loop, which owns the terminal.
+    fn request_edit_env(&mut self) {
+        if self.current_env().is_none() {
+            self.status = "Select an environment to edit.".into();
+            return;
+        }
+        self.pending_editor = true;
     }
 
     fn start_delete(&mut self) {
@@ -653,6 +672,77 @@ impl App {
         };
     }
 
+    /// Open the whole current environment in the user's `$EDITOR` as a `.env`
+    /// document. On save it is parsed back and replaces the environment's
+    /// contents. The terminal is suspended for the duration of the editor.
+    fn edit_env_in_editor<B: ratatui::backend::Backend>(
+        &mut self,
+        terminal: &mut Terminal<B>,
+    ) -> Result<()> {
+        let (Some(project), Some(env)) = (self.current_project_name(), self.current_env_name())
+        else {
+            return Ok(());
+        };
+        let values = self
+            .current_env()
+            .map(|e| e.values.clone())
+            .unwrap_or_default();
+
+        // Write the current values to a temp file as a commented .env.
+        let mut path = std::env::temp_dir();
+        path.push(format!(
+            "devsecrets-{}-{}-{}.env",
+            sanitize(&project),
+            sanitize(&env),
+            std::process::id()
+        ));
+        let template = editor_template(&project, &env, &values);
+        if let Err(e) = std::fs::write(&path, template) {
+            self.status = format!("Could not create temp file: {e}");
+            return Ok(());
+        }
+
+        // Suspend the TUI, run the editor, then restore.
+        suspend_terminal()?;
+        let launched = launch_editor(&path);
+        resume_terminal()?;
+        terminal.clear()?;
+
+        match launched {
+            Ok(true) => {}
+            Ok(false) => {
+                self.status = "Editor exited without saving; no changes made.".into();
+                let _ = std::fs::remove_file(&path);
+                return Ok(());
+            }
+            Err(e) => {
+                self.status = format!("Could not launch editor: {e}");
+                let _ = std::fs::remove_file(&path);
+                return Ok(());
+            }
+        }
+
+        let edited = match std::fs::read_to_string(&path) {
+            Ok(t) => t,
+            Err(e) => {
+                self.status = format!("Could not read edited file: {e}");
+                let _ = std::fs::remove_file(&path);
+                return Ok(());
+            }
+        };
+        let _ = std::fs::remove_file(&path);
+
+        let parsed = envfile::parse(&edited);
+        let count = parsed.len();
+        if let Some(e) = self.current_env_mut() {
+            e.values = parsed;
+        }
+        self.save();
+        self.clamp_indices();
+        self.status = format!("Updated `{project}/{env}` ({count} secrets) from editor.");
+        Ok(())
+    }
+
     // --- confirm modal -----------------------------------------------------
 
     fn on_confirm_key(&mut self, key: KeyEvent) -> Result<()> {
@@ -864,7 +954,7 @@ impl App {
 
     fn draw_status(&self, f: &mut Frame, area: Rect) {
         let keys =
-            "n:new e:edit d:del y:dup i:import x:export D:default f:folder s:show ?:help q:quit";
+            "n:new e:edit E:editor d:del y:dup i:import x:export D:default f:folder s:show ?:help q:quit";
         let line = Line::from(vec![
             Span::styled(
                 format!(" {} ", self.status),
@@ -940,6 +1030,7 @@ impl App {
             Line::from("Actions (context = focused pane)"),
             Line::from("  n  new project / env / secret"),
             Line::from("  e  edit secret value   Enter on a secret also edits"),
+            Line::from("  E  edit the whole environment in $EDITOR (as a .env)"),
             Line::from("  d  delete focused item (asks to confirm)"),
             Line::from("  y  duplicate environment"),
             Line::from("  i  import a .env file into the selected env"),
@@ -967,6 +1058,69 @@ fn mask(value: &str) -> String {
     }
 }
 
+/// Build the `.env` document shown to the user in their editor.
+fn editor_template(project: &str, env: &str, values: &indexmap::IndexMap<String, String>) -> String {
+    let mut out = String::new();
+    out.push_str(&format!("# dev-secrets — editing {project}/{env}\n"));
+    out.push_str("# Edit as a normal .env file: KEY=VALUE per line.\n");
+    out.push_str("# Lines you remove are deleted; blank lines and # comments are ignored.\n");
+    out.push_str("# References like ${project.env.KEY} are kept as-is and resolved on export.\n");
+    out.push_str("# Save and quit to apply, or quit without saving to cancel.\n\n");
+    out.push_str(&envfile::serialize(values));
+    out
+}
+
+/// Replace characters that are awkward in a temp file name.
+fn sanitize(s: &str) -> String {
+    s.chars()
+        .map(|c| if c.is_alphanumeric() { c } else { '_' })
+        .collect()
+}
+
+/// Pick the editor command: `$VISUAL`, then `$EDITOR`, then a sane default.
+fn editor_command() -> String {
+    std::env::var("VISUAL")
+        .ok()
+        .filter(|s| !s.trim().is_empty())
+        .or_else(|| std::env::var("EDITOR").ok().filter(|s| !s.trim().is_empty()))
+        .unwrap_or_else(|| if cfg!(windows) { "notepad".into() } else { "vi".into() })
+}
+
+/// Spawn the editor on `path` and wait. Returns `Ok(true)` if the editor
+/// exited successfully (the user saved/closed normally).
+fn launch_editor(path: &std::path::Path) -> Result<bool> {
+    let command = editor_command();
+    // The editor variable may include arguments, e.g. `code --wait`.
+    let mut parts = command.split_whitespace();
+    let program = parts.next().unwrap_or("vi");
+    let args: Vec<&str> = parts.collect();
+
+    let status = std::process::Command::new(program)
+        .args(&args)
+        .arg(path)
+        .status()?;
+    Ok(status.success())
+}
+
+/// Leave raw mode + the alternate screen so an external program can use the
+/// terminal normally.
+fn suspend_terminal() -> Result<()> {
+    use ratatui::crossterm::execute;
+    use ratatui::crossterm::terminal::{disable_raw_mode, LeaveAlternateScreen};
+    disable_raw_mode()?;
+    execute!(std::io::stdout(), LeaveAlternateScreen)?;
+    Ok(())
+}
+
+/// Re-enter raw mode + the alternate screen after an external program exits.
+fn resume_terminal() -> Result<()> {
+    use ratatui::crossterm::execute;
+    use ratatui::crossterm::terminal::{enable_raw_mode, EnterAlternateScreen};
+    enable_raw_mode()?;
+    execute!(std::io::stdout(), EnterAlternateScreen)?;
+    Ok(())
+}
+
 /// Centred rectangle `width` percent wide and `height` rows tall.
 fn centered_rect(percent_x: u16, height: u16, area: Rect) -> Rect {
     let vertical = Layout::default()
@@ -985,4 +1139,28 @@ fn centered_rect(percent_x: u16, height: u16, area: Rect) -> Rect {
             Constraint::Percentage((100 - percent_x) / 2),
         ])
         .split(vertical[1])[1]
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use indexmap::IndexMap;
+
+    #[test]
+    fn editor_template_roundtrips() {
+        let mut values = IndexMap::new();
+        values.insert("DB_HOST".to_string(), "localhost".to_string());
+        values.insert("TOKEN".to_string(), "with space".to_string());
+        values.insert("API_URL".to_string(), "http://${api.dev.DB_HOST}:5432".to_string());
+
+        let doc = editor_template("api", "dev", &values);
+        // Header lines are comments and must be ignored on parse.
+        let parsed = envfile::parse(&doc);
+        assert_eq!(parsed, values);
+    }
+
+    #[test]
+    fn sanitize_replaces_specials() {
+        assert_eq!(sanitize("my project/1"), "my_project_1");
+    }
 }

@@ -202,6 +202,7 @@ Environments → Secrets** — and navigate left-to-right as you drill in.
 | `Tab`           | Cycle focus between panes                           |
 | `n`             | New project / env / secret (based on focused pane)  |
 | `e` / `Enter`   | Edit the selected secret's value                    |
+| `E`             | Edit the whole environment in `$EDITOR` (as `.env`) |
 | `d`             | Delete the focused item (asks for confirmation)     |
 | `y`             | Duplicate the selected environment                  |
 | `i`             | Import a `.env` file into the selected environment  |
@@ -214,6 +215,15 @@ Environments → Secrets** — and navigate left-to-right as you drill in.
 
 New secrets are entered as `KEY=VALUE`. Values are masked by default — press
 `s` to reveal them.
+
+### Bulk-editing an environment in your editor
+
+Press `E` with an environment selected to open **the entire environment** in
+your editor (`$VISUAL`, then `$EDITOR`, falling back to `vi` / `notepad`) as a
+normal `.env` document. Add, change, reorder, or remove lines freely; when you
+save and quit, the file is parsed back and replaces the environment's
+contents. Quit without saving to cancel — nothing changes. References like
+`${project.env.KEY}` are preserved verbatim and resolved on export as usual.
 
 ---
 
