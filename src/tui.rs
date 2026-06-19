@@ -5,6 +5,8 @@
 //! filter prompt, a results list with match highlighting, and a live preview
 //! pane. Every mutating action is a single keypress and persists immediately.
 
+use std::collections::HashSet;
+
 use anyhow::Result;
 use ratatui::crossterm::event::{self, Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
 use ratatui::layout::{Constraint, Direction, Layout, Margin, Rect};
@@ -27,12 +29,19 @@ const ACCENT: Color = Color::Cyan;
 const MAX_WIDTH: u16 = 110;
 const MAX_HEIGHT: u16 = 34;
 
-/// Which pane currently has keyboard focus.
+/// Which screen currently has keyboard focus. Projects and environments share
+/// one combined tree screen; secrets are a second screen you drill into.
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Focus {
-    Projects,
-    Envs,
+    Tree,
     Secrets,
+}
+
+/// A visible row in the combined Projects/Environments tree.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Row {
+    Project(usize),
+    Env(usize, usize),
 }
 
 /// What a submitted text prompt should do.
@@ -212,6 +221,10 @@ pub struct App {
     proj_idx: usize,
     env_idx: usize,
     secret_idx: usize,
+    /// Selected row in the combined tree screen.
+    tree_sel: usize,
+    /// Names of projects whose environments are collapsed in the tree.
+    collapsed: HashSet<String>,
     reveal: bool,
     show_help: bool,
     /// Selected row in the reference-autocomplete popup.
@@ -256,10 +269,12 @@ impl App {
         App {
             handle,
             meta,
-            focus: Focus::Projects,
+            focus: Focus::Tree,
             proj_idx: 0,
             env_idx: 0,
             secret_idx: 0,
+            tree_sel: 0,
+            collapsed: HashSet::new(),
             reveal: false,
             show_help: false,
             ac_sel: 0,
@@ -382,8 +397,25 @@ impl App {
             self.focus = Focus::Secrets;
             self.status = format!("This folder is assigned to {project}/{env}.");
         } else {
-            self.focus = Focus::Envs;
+            self.focus = Focus::Tree;
         }
+        self.tree_sel = self.tree_row_for(self.proj_idx, ei);
+    }
+
+    /// Index of the tree row for a project (and optional env), best-effort.
+    fn tree_row_for(&self, pi: usize, ei: Option<usize>) -> usize {
+        let rows = self.tree_rows();
+        rows.iter()
+            .position(|r| match (r, ei) {
+                (Row::Env(p, e), Some(ei)) => *p == pi && *e == ei,
+                (Row::Project(p), None) => *p == pi,
+                _ => false,
+            })
+            .or_else(|| {
+                rows.iter()
+                    .position(|r| matches!(r, Row::Project(p) if *p == pi))
+            })
+            .unwrap_or(0)
     }
 
     // --- key handling ------------------------------------------------------
@@ -466,6 +498,7 @@ impl App {
             }
             (KeyCode::Enter, _) => self.on_enter(),
             (KeyCode::Char('n'), _) => self.start_new(),
+            (KeyCode::Char('p'), _) => self.start_new_project(),
             (KeyCode::Char('e'), _) => self.start_edit(),
             (KeyCode::Char('a'), _) => self.open_inline_editor(),
             (KeyCode::Char('E'), _) => self.request_edit_env(),
@@ -489,60 +522,179 @@ impl App {
 
     fn focus_deeper(&mut self) {
         match self.focus {
-            Focus::Projects if self.current_project().is_some() => {
-                self.focus = Focus::Envs;
-                self.reset_query();
-                self.env_idx = 0;
-                self.secret_idx = 0;
-            }
-            Focus::Envs if self.current_env().is_some() => {
-                self.focus = Focus::Secrets;
-                self.reset_query();
-                self.secret_idx = 0;
-            }
-            _ => {}
+            Focus::Tree => match self.selected_row() {
+                Some(Row::Env(pi, ei)) => {
+                    self.proj_idx = pi;
+                    self.env_idx = ei;
+                    self.secret_idx = 0;
+                    self.focus = Focus::Secrets;
+                    self.reset_query();
+                }
+                Some(Row::Project(pi)) => self.set_collapsed(pi, false),
+                None => {}
+            },
+            Focus::Secrets => {}
         }
     }
 
     fn focus_shallower(&mut self) {
-        let new = match self.focus {
-            Focus::Secrets => Focus::Envs,
-            Focus::Envs => Focus::Projects,
-            Focus::Projects => Focus::Projects,
-        };
-        if new != self.focus {
-            self.focus = new;
-            self.reset_query();
+        match self.focus {
+            Focus::Secrets => {
+                self.focus = Focus::Tree;
+                self.reset_query();
+                self.tree_sel = self.tree_row_for(self.proj_idx, Some(self.env_idx));
+            }
+            Focus::Tree => match self.selected_row() {
+                Some(Row::Env(pi, _)) => {
+                    // Jump to the parent project row.
+                    self.tree_sel = self.tree_row_for(pi, None);
+                    self.sync_from_tree();
+                }
+                Some(Row::Project(pi)) => self.set_collapsed(pi, true),
+                None => {}
+            },
         }
     }
 
     fn on_enter(&mut self) {
         match self.focus {
-            Focus::Projects | Focus::Envs => self.focus_deeper(),
+            Focus::Tree => match self.selected_row() {
+                Some(Row::Env(..)) => self.focus_deeper(),
+                Some(Row::Project(pi)) => {
+                    let collapsed = self.is_collapsed(pi);
+                    self.set_collapsed(pi, !collapsed);
+                }
+                None => {}
+            },
             Focus::Secrets => self.start_edit_secret(),
         }
     }
 
-    /// Names of the items in the active picker, in store order (used both for
-    /// fuzzy matching and as display labels).
-    fn level_labels(&self) -> Vec<String> {
-        match self.focus {
-            Focus::Projects => self.handle.store.projects.keys().cloned().collect(),
-            Focus::Envs => self
-                .current_project()
-                .map(|p| p.environments.keys().cloned().collect())
-                .unwrap_or_default(),
-            Focus::Secrets => self
-                .current_env()
-                .map(|e| e.values.keys().cloned().collect())
-                .unwrap_or_default(),
+    // --- tree (combined Projects + Environments) --------------------------
+
+    fn project_name_at(&self, pi: usize) -> Option<String> {
+        self.handle
+            .store
+            .projects
+            .get_index(pi)
+            .map(|(k, _)| k.clone())
+    }
+
+    fn is_collapsed(&self, pi: usize) -> bool {
+        self.project_name_at(pi)
+            .map(|n| self.collapsed.contains(&n))
+            .unwrap_or(false)
+    }
+
+    fn set_collapsed(&mut self, pi: usize, collapsed: bool) {
+        if let Some(name) = self.project_name_at(pi) {
+            if collapsed {
+                self.collapsed.insert(name);
+            } else {
+                self.collapsed.remove(&name);
+            }
+            // Selection may now point past the end; clamp + resync.
+            self.clamp_tree_sel();
+            self.sync_from_tree();
         }
     }
 
-    /// Real indices of the active picker's items that match the current query,
-    /// best match first. With an empty query this is every item in order.
+    /// The visible rows of the tree, honouring the fuzzy filter and (when not
+    /// searching) the per-project collapse state.
+    fn tree_rows(&self) -> Vec<Row> {
+        let q = &self.query;
+        let mut rows = Vec::new();
+        for (pi, (pname, proj)) in self.handle.store.projects.iter().enumerate() {
+            let p_match = q.is_empty() || fuzzy::score(q, pname).is_some();
+            let env_hits: Vec<usize> = proj
+                .environments
+                .keys()
+                .enumerate()
+                .filter(|(_, ename)| q.is_empty() || fuzzy::score(q, ename).is_some())
+                .map(|(ei, _)| ei)
+                .collect();
+
+            // Include the project if it matches, or any of its envs match.
+            if !p_match && env_hits.is_empty() {
+                continue;
+            }
+            rows.push(Row::Project(pi));
+
+            // Show envs: respect collapse only when not searching.
+            let show = if q.is_empty() {
+                !self.collapsed.contains(pname)
+            } else {
+                true
+            };
+            if show {
+                // If the project itself matched, keep all its envs; otherwise
+                // only the matching ones.
+                let envs: Vec<usize> = if p_match {
+                    (0..proj.environments.len()).collect()
+                } else {
+                    env_hits
+                };
+                for ei in envs {
+                    rows.push(Row::Env(pi, ei));
+                }
+            }
+        }
+        rows
+    }
+
+    fn selected_row(&self) -> Option<Row> {
+        self.tree_rows().get(self.tree_sel).copied()
+    }
+
+    /// The (project, env) indices if an environment row is selected.
+    fn selected_env(&self) -> Option<(usize, usize)> {
+        match self.selected_row()? {
+            Row::Env(pi, ei) => Some((pi, ei)),
+            Row::Project(_) => None,
+        }
+    }
+
+    fn selected_project_index(&self) -> Option<usize> {
+        match self.selected_row()? {
+            Row::Project(pi) | Row::Env(pi, _) => Some(pi),
+        }
+    }
+
+    fn clamp_tree_sel(&mut self) {
+        let n = self.tree_rows().len();
+        if self.tree_sel >= n {
+            self.tree_sel = n.saturating_sub(1);
+        }
+    }
+
+    /// Sync proj_idx/env_idx from the selected tree row so the rest of the app
+    /// (preview, actions) sees a consistent current project/env.
+    fn sync_from_tree(&mut self) {
+        match self.selected_row() {
+            Some(Row::Project(pi)) => {
+                self.proj_idx = pi;
+                self.env_idx = 0;
+            }
+            Some(Row::Env(pi, ei)) => {
+                self.proj_idx = pi;
+                self.env_idx = ei;
+            }
+            None => {}
+        }
+    }
+
+    // --- secrets-level selection helpers ----------------------------------
+
+    /// Secret keys in the current environment (for fuzzy filtering).
+    fn secret_labels(&self) -> Vec<String> {
+        self.current_env()
+            .map(|e| e.values.keys().cloned().collect())
+            .unwrap_or_default()
+    }
+
+    /// Real indices of secrets matching the query, best match first.
     fn filtered_indices(&self) -> Vec<usize> {
-        let labels = self.level_labels();
+        let labels = self.secret_labels();
         if self.query.is_empty() {
             return (0..labels.len()).collect();
         }
@@ -555,78 +707,54 @@ impl App {
         scored.into_iter().map(|(_, i)| i).collect()
     }
 
-    /// Real index of the active picker's current selection.
-    fn cur_index(&self) -> usize {
-        match self.focus {
-            Focus::Projects => self.proj_idx,
-            Focus::Envs => self.env_idx,
-            Focus::Secrets => self.secret_idx,
-        }
-    }
-
-    /// Move the active picker's selection to real index `i`, resetting any
-    /// deeper selections.
-    fn set_cur_index(&mut self, i: usize) {
-        match self.focus {
-            Focus::Projects => {
-                self.proj_idx = i;
-                self.env_idx = 0;
-                self.secret_idx = 0;
-            }
-            Focus::Envs => {
-                self.env_idx = i;
-                self.secret_idx = 0;
-            }
-            Focus::Secrets => self.secret_idx = i,
-        }
-    }
-
-    /// Keep the selection on a visible (matching) item after the query changes.
+    /// Keep the selection on a visible item after the query changes.
     fn sync_selection(&mut self) {
-        let f = self.filtered_indices();
-        if f.is_empty() {
-            return;
-        }
-        if !f.contains(&self.cur_index()) {
-            self.set_cur_index(f[0]);
+        match self.focus {
+            Focus::Tree => {
+                self.clamp_tree_sel();
+                self.sync_from_tree();
+            }
+            Focus::Secrets => {
+                let f = self.filtered_indices();
+                if f.is_empty() {
+                    return;
+                }
+                if !f.contains(&self.secret_idx) {
+                    self.secret_idx = f[0];
+                }
+            }
         }
     }
 
     fn move_selection(&mut self, delta: i32) {
-        let f = self.filtered_indices();
-        if f.is_empty() {
-            return;
+        match self.focus {
+            Focus::Tree => {
+                let n = self.tree_rows().len();
+                if n == 0 {
+                    return;
+                }
+                self.tree_sel = (self.tree_sel as i32 + delta).rem_euclid(n as i32) as usize;
+                self.sync_from_tree();
+            }
+            Focus::Secrets => {
+                let f = self.filtered_indices();
+                if f.is_empty() {
+                    return;
+                }
+                let pos = f.iter().position(|&i| i == self.secret_idx).unwrap_or(0);
+                let new = (pos as i32 + delta).rem_euclid(f.len() as i32) as usize;
+                self.secret_idx = f[new];
+            }
         }
-        let cur = self.cur_index();
-        let pos = f.iter().position(|&i| i == cur).unwrap_or(0);
-        let new = (pos as i32 + delta).rem_euclid(f.len() as i32) as usize;
-        self.set_cur_index(f[new]);
     }
 
     // --- action starters ---------------------------------------------------
 
+    /// `n`: on the tree, add an environment to the selected project; on the
+    /// secrets screen, add a secret.
     fn start_new(&mut self) {
         match self.focus {
-            Focus::Projects => {
-                self.input = Some(InputState {
-                    title: "New project".into(),
-                    prompt: "Project name:".into(),
-                    buffer: String::new(),
-                    action: InputAction::NewProject,
-                })
-            }
-            Focus::Envs => {
-                if self.current_project().is_none() {
-                    self.status = "Create a project first.".into();
-                    return;
-                }
-                self.input = Some(InputState {
-                    title: "New environment".into(),
-                    prompt: "Environment name:".into(),
-                    buffer: String::new(),
-                    action: InputAction::NewEnv,
-                });
-            }
+            Focus::Tree => self.start_new_env(),
             Focus::Secrets => {
                 if self.current_env().is_none() {
                     self.status = "Create an environment first.".into();
@@ -642,12 +770,55 @@ impl App {
         }
     }
 
-    /// Context-aware edit: a single secret when focused on the Secrets pane,
-    /// otherwise the whole environment in the inline editor.
+    /// `p`: create a new project.
+    fn start_new_project(&mut self) {
+        self.input = Some(InputState {
+            title: "New project".into(),
+            prompt: "Project name:".into(),
+            buffer: String::new(),
+            action: InputAction::NewProject,
+        });
+    }
+
+    /// Create a new environment under the selected project.
+    fn start_new_env(&mut self) {
+        let Some(pi) = self.selected_project_index() else {
+            self.status = "No project yet — press p to create one.".into();
+            return;
+        };
+        self.proj_idx = pi;
+        self.input = Some(InputState {
+            title: "New environment".into(),
+            prompt: "Environment name:".into(),
+            buffer: String::new(),
+            action: InputAction::NewEnv,
+        });
+    }
+
+    /// Ensure an environment is selected, syncing proj_idx/env_idx to it.
+    /// Returns false (and sets a status) when none is selected.
+    fn require_selected_env(&mut self) -> bool {
+        match self.focus {
+            Focus::Secrets => self.current_env().is_some(),
+            Focus::Tree => {
+                if let Some((pi, ei)) = self.selected_env() {
+                    self.proj_idx = pi;
+                    self.env_idx = ei;
+                    true
+                } else {
+                    self.status = "Select an environment (not a project) first.".into();
+                    false
+                }
+            }
+        }
+    }
+
+    /// Context-aware edit: a single secret on the secrets screen, otherwise the
+    /// selected environment in the inline editor.
     fn start_edit(&mut self) {
         if self.focus == Focus::Secrets && self.current_secret_key().is_some() {
             self.start_edit_secret();
-        } else {
+        } else if self.require_selected_env() {
             self.open_inline_editor();
         }
     }
@@ -679,12 +850,12 @@ impl App {
         });
     }
 
-    /// Context-aware copy: the selected secret's value when on the Secrets
-    /// pane, otherwise the whole environment as a `.env` document.
+    /// Context-aware copy: the selected secret's value on the secrets screen,
+    /// otherwise the selected environment as a `.env` document.
     fn copy_context(&mut self) {
         if self.focus == Focus::Secrets && self.current_secret_key().is_some() {
             self.copy_secret();
-        } else {
+        } else if self.require_selected_env() {
             self.copy_env();
         }
     }
@@ -760,36 +931,42 @@ impl App {
         });
     }
 
-    /// Flag that the current environment should be opened in `$EDITOR`. The
-    /// actual launch happens back in the main loop, which owns the terminal.
+    /// Open the selected environment in `$EDITOR`. The actual launch happens
+    /// back in the main loop, which owns the terminal.
     fn request_edit_env(&mut self) {
-        if self.current_env().is_none() {
-            self.status = "Select an environment to edit.".into();
-            return;
+        if self.require_selected_env() {
+            self.pending_editor = true;
         }
-        self.pending_editor = true;
     }
 
     fn start_delete(&mut self) {
         match self.focus {
-            Focus::Projects => {
-                if let Some(name) = self.current_project_name() {
-                    self.confirm = Some(ConfirmState {
-                        message: format!("Delete project `{name}` and all its environments?"),
-                        action: ConfirmAction::DeleteProject(name),
-                    });
+            Focus::Tree => match self.selected_row() {
+                Some(Row::Project(pi)) => {
+                    if let Some(name) = self.project_name_at(pi) {
+                        self.confirm = Some(ConfirmState {
+                            message: format!("Delete project `{name}` and all its environments?"),
+                            action: ConfirmAction::DeleteProject(name),
+                        });
+                    }
                 }
-            }
-            Focus::Envs => {
-                if let (Some(project), Some(env)) =
-                    (self.current_project_name(), self.current_env_name())
-                {
+                Some(Row::Env(pi, ei)) => {
+                    let project = self.project_name_at(pi).unwrap_or_default();
+                    let env = self
+                        .handle
+                        .store
+                        .projects
+                        .get_index(pi)
+                        .and_then(|(_, p)| p.environments.get_index(ei))
+                        .map(|(n, _)| n.clone())
+                        .unwrap_or_default();
                     self.confirm = Some(ConfirmState {
                         message: format!("Delete environment `{project}/{env}`?"),
                         action: ConfirmAction::DeleteEnv { project, env },
                     });
                 }
-            }
+                None => {}
+            },
             Focus::Secrets => {
                 if let (Some(project), Some(env), Some(key)) = (
                     self.current_project_name(),
@@ -806,8 +983,7 @@ impl App {
     }
 
     fn start_duplicate(&mut self) {
-        if self.focus != Focus::Envs {
-            self.status = "Duplicate works on environments (focus the Envs pane).".into();
+        if !self.require_selected_env() {
             return;
         }
         let Some(from) = self.current_env_name() else {
@@ -822,8 +998,7 @@ impl App {
     }
 
     fn start_import(&mut self) {
-        if self.current_env().is_none() {
-            self.status = "Select an environment to import into.".into();
+        if !self.require_selected_env() {
             return;
         }
         self.input = Some(InputState {
@@ -835,8 +1010,7 @@ impl App {
     }
 
     fn start_export(&mut self) {
-        if self.current_env().is_none() {
-            self.status = "Select an environment to export.".into();
+        if !self.require_selected_env() {
             return;
         }
         self.input = Some(InputState {
@@ -849,9 +1023,11 @@ impl App {
 
     /// Assign the current working directory to the selected project + env.
     fn assign_folder(&mut self) {
+        if !self.require_selected_env() {
+            return;
+        }
         let (Some(project), Some(env)) = (self.current_project_name(), self.current_env_name())
         else {
-            self.status = "Select a project and environment to assign this folder.".into();
             return;
         };
         let dir = match meta::current_dir() {
@@ -870,8 +1046,7 @@ impl App {
     }
 
     fn set_default_env(&mut self) {
-        if self.focus != Focus::Envs {
-            self.status = "Set default works on environments.".into();
+        if !self.require_selected_env() {
             return;
         }
         if let (Some(project), Some(env)) = (self.current_project_name(), self.current_env_name()) {
@@ -1642,7 +1817,7 @@ impl App {
             .title_bottom(Line::from(format!(" {} ", self.status)).left_aligned())
             .title_bottom(
                 Line::from(Span::styled(
-                    " / search · n new · e edit · c copy · d del · ? help · q quit ",
+                    " / search · n new env · p new project · e edit · d del · ? help · q quit ",
                     Style::default().fg(Color::DarkGray),
                 ))
                 .right_aligned(),
@@ -1664,14 +1839,10 @@ impl App {
         self.draw_prompt(f, rows[1]);
     }
 
-    /// Breadcrumb shown in the window title, e.g. `api ▸ dev ▸ Secrets`.
+    /// Breadcrumb shown in the window title.
     fn breadcrumb(&self) -> String {
         match self.focus {
-            Focus::Projects => "Projects".to_string(),
-            Focus::Envs => format!(
-                "{} ▸ Environments",
-                self.current_project_name().unwrap_or_default()
-            ),
+            Focus::Tree => "Projects / Environments".to_string(),
             Focus::Secrets => format!(
                 "{} ▸ {} ▸ Secrets",
                 self.current_project_name().unwrap_or_default(),
@@ -1680,47 +1851,150 @@ impl App {
         }
     }
 
-    /// The filtered results list with fuzzy-match highlighting.
     fn draw_results(&self, f: &mut Frame, area: Rect) {
-        let labels = self.level_labels();
+        match self.focus {
+            Focus::Tree => self.draw_tree(f, area),
+            Focus::Secrets => self.draw_secrets(f, area),
+        }
+    }
+
+    /// The combined Projects + Environments tree with fuzzy highlighting.
+    fn draw_tree(&self, f: &mut Frame, area: Rect) {
+        let rows = self.tree_rows();
+        let q = &self.query;
+        let mut items: Vec<ListItem> = Vec::with_capacity(rows.len());
+        for r in &rows {
+            match *r {
+                Row::Project(pi) => {
+                    let (name, proj) = self.handle.store.projects.get_index(pi).unwrap();
+                    let has_envs = !proj.environments.is_empty();
+                    let collapsed = q.is_empty() && self.collapsed.contains(name);
+                    let indicator = if !has_envs {
+                        "  "
+                    } else if collapsed {
+                        "▸ "
+                    } else {
+                        "▾ "
+                    };
+                    let matches = fuzzy::score(q, name).map(|(_, m)| m).unwrap_or_default();
+                    let mut spans = vec![Span::styled(
+                        indicator,
+                        Style::default().fg(Color::DarkGray),
+                    )];
+                    spans.extend(name_spans(
+                        name,
+                        &matches,
+                        Style::default()
+                            .fg(Color::White)
+                            .add_modifier(Modifier::BOLD),
+                    ));
+                    spans.push(Span::styled(
+                        format!("  ({} env)", proj.environments.len()),
+                        Style::default().fg(Color::DarkGray),
+                    ));
+                    items.push(ListItem::new(Line::from(spans)));
+                }
+                Row::Env(pi, ei) => {
+                    let (_, proj) = self.handle.store.projects.get_index(pi).unwrap();
+                    let (ename, env) = proj.environments.get_index(ei).unwrap();
+                    let is_default = proj.default_env.as_deref() == Some(ename.as_str());
+                    let matches = fuzzy::score(q, ename).map(|(_, m)| m).unwrap_or_default();
+                    let mut spans =
+                        vec![Span::styled("    – ", Style::default().fg(Color::DarkGray))];
+                    spans.extend(name_spans(ename, &matches, Style::default().fg(ACCENT)));
+                    if is_default {
+                        spans.push(Span::styled(" ★", Style::default().fg(Color::Yellow)));
+                    }
+                    spans.push(Span::styled(
+                        format!("  {} keys", env.values.len()),
+                        Style::default().fg(Color::DarkGray),
+                    ));
+                    items.push(ListItem::new(Line::from(spans)));
+                }
+            }
+        }
+
+        let nproj = self.handle.store.projects.len();
+        let block = Block::default()
+            .borders(Borders::ALL)
+            .border_type(BorderType::Rounded)
+            .border_style(Style::default().fg(Color::DarkGray))
+            .title(format!(" Projects · Environments  ({nproj}) "));
+
+        if items.is_empty() {
+            let msg = if nproj == 0 {
+                "No projects yet — press p to create one".to_string()
+            } else {
+                "No matches".to_string()
+            };
+            f.render_widget(
+                Paragraph::new(Span::styled(msg, Style::default().fg(Color::DarkGray)))
+                    .block(block),
+                area,
+            );
+            return;
+        }
+
+        let list = List::new(items)
+            .block(block)
+            .highlight_style(
+                Style::default()
+                    .bg(ACCENT)
+                    .fg(Color::Black)
+                    .add_modifier(Modifier::BOLD),
+            )
+            .highlight_symbol("▌");
+        let mut state = ListState::default();
+        state.select(Some(self.tree_sel.min(rows.len().saturating_sub(1))));
+        f.render_stateful_widget(list, area, &mut state);
+    }
+
+    /// The secrets list for the current environment, fuzzy-filtered.
+    fn draw_secrets(&self, f: &mut Frame, area: Rect) {
+        let labels = self.secret_labels();
         let filtered = self.filtered_indices();
-        let cur = self.cur_index();
 
         let mut items: Vec<ListItem> = Vec::with_capacity(filtered.len());
         let mut selected_row = 0;
         for (row, &idx) in filtered.iter().enumerate() {
-            if idx == cur {
+            if idx == self.secret_idx {
                 selected_row = row;
             }
             let name = &labels[idx];
             let matches = fuzzy::score(&self.query, name)
                 .map(|(_, m)| m)
                 .unwrap_or_default();
-            let (suffix, suffix_style) = self.result_suffix(idx);
+            let v = self
+                .current_env()
+                .and_then(|e| e.values.get_index(idx))
+                .map(|(_, v)| v.clone())
+                .unwrap_or_default();
+            let shown = if self.reveal { v } else { mask(&v) };
             items.push(ListItem::new(highlight_line(
                 name,
                 &matches,
-                suffix,
-                suffix_style,
+                format!("  = {shown}"),
+                Style::default().fg(Color::Gray),
             )));
         }
 
-        let title = format!(" Results  {}/{} ", filtered.len(), labels.len());
         let block = Block::default()
             .borders(Borders::ALL)
             .border_type(BorderType::Rounded)
             .border_style(Style::default().fg(Color::DarkGray))
-            .title(title);
+            .title(format!(" Secrets  {}/{} ", filtered.len(), labels.len()));
 
         if items.is_empty() {
             let msg = if labels.is_empty() {
-                empty_hint(self.focus)
+                "No secrets — press n to add one".to_string()
             } else {
                 "No matches".to_string()
             };
-            let p = Paragraph::new(Span::styled(msg, Style::default().fg(Color::DarkGray)))
-                .block(block);
-            f.render_widget(p, area);
+            f.render_widget(
+                Paragraph::new(Span::styled(msg, Style::default().fg(Color::DarkGray)))
+                    .block(block),
+                area,
+            );
             return;
         }
 
@@ -1738,47 +2012,6 @@ impl App {
         f.render_stateful_widget(list, area, &mut state);
     }
 
-    /// Trailing annotation for a result row (counts, default marker, value).
-    fn result_suffix(&self, idx: usize) -> (String, Style) {
-        match self.focus {
-            Focus::Projects => {
-                let count = self
-                    .handle
-                    .store
-                    .projects
-                    .get_index(idx)
-                    .map(|(_, p)| p.environments.len())
-                    .unwrap_or(0);
-                (
-                    format!("  {count} env"),
-                    Style::default().fg(Color::DarkGray),
-                )
-            }
-            Focus::Envs => {
-                let p = self.current_project();
-                let (name, count) = p
-                    .and_then(|p| p.environments.get_index(idx))
-                    .map(|(n, e)| (n.clone(), e.values.len()))
-                    .unwrap_or_default();
-                let is_default = p.and_then(|p| p.default_env.as_deref()) == Some(name.as_str());
-                let marker = if is_default { " ★" } else { "" };
-                (
-                    format!("{marker}  {count} keys"),
-                    Style::default().fg(Color::DarkGray),
-                )
-            }
-            Focus::Secrets => {
-                let v = self
-                    .current_env()
-                    .and_then(|e| e.values.get_index(idx))
-                    .map(|(_, v)| v.clone())
-                    .unwrap_or_default();
-                let shown = if self.reveal { v } else { mask(&v) };
-                (format!("  = {shown}"), Style::default().fg(Color::Gray))
-            }
-        }
-    }
-
     /// The preview pane: details of the highlighted item.
     fn draw_preview(&self, f: &mut Frame, area: Rect) {
         let block = Block::default()
@@ -1787,8 +2020,10 @@ impl App {
             .border_style(Style::default().fg(Color::DarkGray))
             .title(" Preview ");
         let lines = match self.focus {
-            Focus::Projects => self.preview_project(),
-            Focus::Envs => self.preview_env(),
+            Focus::Tree => match self.selected_row() {
+                Some(Row::Env(..)) => self.preview_env(),
+                _ => self.preview_project(),
+            },
             Focus::Secrets => self.preview_secret(),
         };
         f.render_widget(
@@ -2175,35 +2410,30 @@ impl App {
     }
 
     fn draw_help(&self, f: &mut Frame) {
-        let area = centered_rect(70, 20, f.area());
+        let area = centered_rect(72, 22, f.area());
         f.render_widget(Clear, area);
         let block = Block::default()
             .borders(Borders::ALL)
             .border_style(Style::default().fg(Color::Cyan))
             .title(" Help — press any key to close ");
         let lines = vec![
-            Line::from("Navigation"),
-            Line::from("  /           fuzzy-filter the current list"),
+            Line::from("Navigation (Projects + Environments share one tree)"),
+            Line::from("  /           fuzzy-filter (matches projects and environments)"),
             Line::from("  ↑/k ↓/j     move selection (Ctrl-n/Ctrl-p while searching)"),
-            Line::from("  →/l Enter   drill into Projects → Envs → Secrets"),
-            Line::from("  ←/h Esc     go back a level"),
+            Line::from("  →/l         expand project / open environment → Secrets"),
+            Line::from("  ←/h         collapse project / jump to parent project"),
+            Line::from("  Enter       toggle a project, or open an environment"),
             Line::from(""),
-            Line::from("Actions (context = current level)"),
-            Line::from("  n  new project / env / secret (secret uses Key + Value fields)"),
-            Line::from("  e  edit secret (on Secrets) / whole env inline (otherwise)"),
-            Line::from("  a  edit the whole environment inline (multi-line .env editor)"),
-            Line::from("  E  edit the whole environment in $EDITOR (as a .env)"),
-            Line::from("  c  copy: secret value (on Secrets) / whole env (otherwise)"),
-            Line::from("  C  copy the whole environment as a .env document"),
-            Line::from("  d  delete focused item (asks to confirm)"),
-            Line::from("  y  duplicate environment"),
-            Line::from("  i  import a .env file into the selected env"),
-            Line::from("  x  export the selected env to a .env file"),
-            Line::from("  D  set selected env as the project default"),
-            Line::from("  f  assign the current folder to this project/env"),
+            Line::from("Actions"),
+            Line::from("  p  new project          n  new env / new secret (on Secrets)"),
+            Line::from("  e  edit (secret, or whole env inline)   a  inline env editor"),
+            Line::from("  E  edit env in $EDITOR   c/C  copy secret value / whole env"),
+            Line::from("  d  delete (project / env / secret)   y  duplicate environment"),
+            Line::from("  i  import .env    x  export .env    D  set default env"),
+            Line::from("  f  assign current folder to this project/env"),
             Line::from("  s  toggle showing/hiding secret values"),
             Line::from(""),
-            Line::from("References: a value like ${proj.env.KEY} is resolved on export."),
+            Line::from("References: ${secret} / ${env.secret} / ${project.env.secret}"),
             Line::from("Quit: q or Ctrl-C"),
         ];
         f.render_widget(Paragraph::new(lines).block(block), area);
@@ -2255,13 +2485,19 @@ fn heading(text: &str) -> Line<'static> {
     ))
 }
 
-/// Hint shown when a picker has no items at all.
-fn empty_hint(focus: Focus) -> String {
-    match focus {
-        Focus::Projects => "No projects yet — press n to create one".to_string(),
-        Focus::Envs => "No environments — press n to create one".to_string(),
-        Focus::Secrets => "No secrets — press n to add one".to_string(),
-    }
+/// Spans for `name` with fuzzy-matched characters highlighted over `base`.
+fn name_spans(name: &str, matches: &[usize], base: Style) -> Vec<Span<'static>> {
+    name.chars()
+        .enumerate()
+        .map(|(i, ch)| {
+            let style = if matches.contains(&i) {
+                Style::default().fg(ACCENT).add_modifier(Modifier::BOLD)
+            } else {
+                base
+            };
+            Span::styled(ch.to_string(), style)
+        })
+        .collect()
 }
 
 fn mask(value: &str) -> String {

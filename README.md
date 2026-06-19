@@ -210,35 +210,49 @@ so `settings` is only needed if you want to relocate it.
 
 Run `devsecrets` with no arguments. The interface is
 [Telescope](https://github.com/nvim-telescope/telescope.nvim)-style: a
-centered, bounded floating window (it never fills the whole terminal) showing
-one picker at a time as you drill through **Projects → Environments →
-Secrets**. Each picker has a fuzzy-filter prompt, a results list with match
-highlighting, and a live preview pane.
+centered, bounded floating window (it never fills the whole terminal) with a
+fuzzy-filter prompt, a results list with match highlighting, and a live
+preview pane.
 
-Press `/` to fuzzy-filter the current list; type to narrow, `Esc` to clear.
-`Enter` opens the highlighted item (drilling a level, or editing a secret).
+**Projects and environments share one tree** — projects with their
+environments nested underneath — which makes fuzzy navigation fast:
 
-| Key             | Action                                              |
-|-----------------|-----------------------------------------------------|
-| `/`             | Fuzzy-filter the current list                       |
-| `↑`/`k` `↓`/`j` | Move selection (`Ctrl-n`/`Ctrl-p` while searching)  |
-| `→`/`l` `Enter` | Drill in (Projects → Envs → Secrets)                |
-| `←`/`h` `Esc`   | Go back a level                                     |
-| `n`             | New project / env / secret (based on current level) |
-| `e`             | Edit secret (on Secrets) / whole env inline (else)  |
-| `a`             | Edit the whole environment inline (multi-line)      |
-| `E`             | Edit the whole environment in `$EDITOR` (as `.env`) |
-| `c`             | Copy: secret value (on Secrets) / whole env (else)  |
-| `C`             | Copy the whole environment as a `.env` document     |
-| `d`             | Delete the focused item (asks for confirmation)     |
-| `y`             | Duplicate the selected environment                  |
-| `i`             | Import a `.env` file into the selected environment  |
-| `x`             | Export the selected environment to a `.env` file    |
-| `D`             | Set the selected environment as the project default |
-| `f`             | Assign the current folder to this project/env       |
-| `s`             | Toggle showing / hiding secret values               |
-| `?`             | Help overlay                                        |
-| `q` / `Ctrl-C`  | Quit                                                |
+```
+▾ api        (2 env)
+    – dev ★  3 keys
+    – prod   3 keys
+▸ web        (1 env)      ← collapsed
+```
+
+Press `/` to fuzzy-filter; it matches **both** project and environment names.
+A match in an environment keeps its project header visible; a match on a
+project keeps all of its environments. Projects can be collapsed to hide their
+environments. Opening an environment drills into its **Secrets** screen.
+
+| Key             | Action                                                |
+|-----------------|-------------------------------------------------------|
+| `/`             | Fuzzy-filter (matches projects **and** environments)  |
+| `↑`/`k` `↓`/`j` | Move selection (`Ctrl-n`/`Ctrl-p` while searching)    |
+| `→`/`l`         | Expand a project / open an environment → Secrets      |
+| `←`/`h`         | Collapse a project / jump to the parent project       |
+| `Enter`         | Toggle a project (collapse), or open an environment   |
+| `Esc`           | Back out of the Secrets screen                         |
+| `p`             | New project                                            |
+| `n`             | New environment (under the selected project) / secret |
+| `e`             | Edit a secret, or the selected env inline             |
+| `a`             | Edit the whole environment inline (multi-line)        |
+| `E`             | Edit the whole environment in `$EDITOR` (as `.env`)   |
+| `c`             | Copy: secret value (on Secrets) / whole env (else)    |
+| `C`             | Copy the whole environment as a `.env` document       |
+| `d`             | Delete the selected project / env / secret (confirm)  |
+| `y`             | Duplicate the selected environment                    |
+| `i`             | Import a `.env` file into the selected environment    |
+| `x`             | Export the selected environment to a `.env` file      |
+| `D`             | Set the selected environment as the project default   |
+| `f`             | Assign the current folder to this project/env         |
+| `s`             | Toggle showing / hiding secret values                 |
+| `?`             | Help overlay                                          |
+| `q` / `Ctrl-C`  | Quit                                                  |
 
 New secrets are entered through a two-field form (**Key** and **Value** as
 separate boxes, `Tab` to switch) so a value can be pasted on its own. Values
