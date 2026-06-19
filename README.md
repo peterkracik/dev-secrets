@@ -377,9 +377,25 @@ devsecrets export -p api
 # Export using this folder's assigned project + env (after `devsecrets setup`)
 devsecrets export
 
+# Choose a format explicitly, or let the file extension decide
+devsecrets export --format json -p api -e dev      # to stdout as JSON
+devsecrets export config.toml -p api -e dev        # inferred TOML
+devsecrets export -p api --format shell            # export KEY=VALUE lines
+
 # Export raw values (do not resolve ${...} references)
 devsecrets export .env -p api --raw
 ```
+
+**Formats** (`--format`, or auto-detected from the file extension):
+
+| Format  | Looks like                | Extensions          |
+|---------|---------------------------|---------------------|
+| `env`   | `KEY=VALUE` (default)     | `.env`              |
+| `shell` | `export KEY=VALUE`        | `.sh` `.bash` `.zsh`|
+| `json`  | `{ "KEY": "VALUE" }`      | `.json`             |
+| `toml`  | `KEY = "VALUE"`           | `.toml`             |
+
+`shell` is handy for `eval "$(devsecrets export --format shell)"`.
 
 ### Duplicate an environment
 

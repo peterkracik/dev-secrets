@@ -37,12 +37,15 @@ pub fn parse(text: &str) -> IndexMap<String, String> {
 pub fn serialize(values: &IndexMap<String, String>) -> String {
     let mut out = String::new();
     for (key, value) in values {
-        out.push_str(key);
-        out.push('=');
-        out.push_str(&quote(value));
+        out.push_str(&kv_line(key, value));
         out.push('\n');
     }
     out
+}
+
+/// A single `KEY=VALUE` assignment with the value quoted/escaped as needed.
+pub fn kv_line(key: &str, value: &str) -> String {
+    format!("{key}={}", quote(value))
 }
 
 fn unquote(value: &str) -> String {

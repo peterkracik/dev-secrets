@@ -6,7 +6,20 @@
 
 use std::path::PathBuf;
 
-use clap::{Parser, Subcommand};
+use clap::{Parser, Subcommand, ValueEnum};
+
+/// Output format for `export`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, ValueEnum)]
+pub enum Format {
+    /// `KEY=VALUE` lines (a `.env` file).
+    Env,
+    /// `export KEY=VALUE` lines, for `eval "$(...)"`.
+    Shell,
+    /// A JSON object of key/value pairs.
+    Json,
+    /// TOML `KEY = "value"` lines.
+    Toml,
+}
 
 #[derive(Parser, Debug)]
 #[command(
@@ -67,7 +80,7 @@ pub enum Command {
         replace: bool,
     },
 
-    /// Export an environment to a .env file (or stdout).
+    /// Export an environment to a file (or stdout) in a chosen format.
     Export {
         /// Output file. If omitted, writes to stdout.
         file: Option<PathBuf>,
@@ -78,6 +91,9 @@ pub enum Command {
         /// the project's default env.
         #[arg(short, long)]
         env: Option<String>,
+        /// Output format. Defaults to the output file's extension, else env.
+        #[arg(short, long, value_enum)]
+        format: Option<Format>,
         /// Do not resolve ${project.env.key} references; export raw values.
         #[arg(long)]
         raw: bool,

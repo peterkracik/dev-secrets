@@ -2,11 +2,11 @@
 
 use std::fs;
 use std::io::IsTerminal;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use anyhow::{bail, Context, Result};
 
-use crate::cli::{Command, EnvAction, ProjectAction, SecretAction};
+use crate::cli::{Command, EnvAction, Format, ProjectAction, SecretAction};
 use crate::config::{self, Settings};
 use crate::meta;
 use crate::model::{Environment, Project};
@@ -32,8 +32,9 @@ pub fn run(command: Command) -> Result<()> {
             file,
             project,
             env,
+            format,
             raw,
-        } => export(file, project, env, raw),
+        } => export(file, project, env, format, raw),
         Command::Duplicate { project, from, to } => duplicate(project, from, to),
         Command::List => list_all(),
     }
@@ -465,6 +466,7 @@ fn export(
     file: Option<PathBuf>,
     project: Option<String>,
     env: Option<String>,
+    format: Option<Format>,
     raw: bool,
 ) -> Result<()> {
     let handle = StoreHandle::open()?;
@@ -510,7 +512,11 @@ fn export(
         };
         resolved.insert(key.clone(), value);
     }
-    let output = envfile::serialize(&resolved);
+    // Choose the format: explicit flag, else the file extension, else env.
+    let fmt = format
+        .or_else(|| file.as_deref().and_then(format_from_path))
+        .unwrap_or(Format::Env);
+    let output = render(&resolved, fmt)?;
 
     match file {
         Some(path) => {
@@ -526,6 +532,34 @@ fn export(
         }
     }
     Ok(())
+}
+
+/// Guess an output format from a file extension.
+fn format_from_path(path: &Path) -> Option<Format> {
+    match path.extension().and_then(|e| e.to_str()) {
+        Some("json") => Some(Format::Json),
+        Some("toml") => Some(Format::Toml),
+        Some("sh" | "bash" | "zsh") => Some(Format::Shell),
+        Some("env") => Some(Format::Env),
+        _ => None,
+    }
+}
+
+/// Render resolved key/value pairs in the requested format.
+fn render(values: &indexmap::IndexMap<String, String>, fmt: Format) -> Result<String> {
+    Ok(match fmt {
+        Format::Env => envfile::serialize(values),
+        Format::Shell => values
+            .iter()
+            .map(|(k, v)| format!("export {}\n", envfile::kv_line(k, v)))
+            .collect(),
+        Format::Json => {
+            let mut s = serde_json::to_string_pretty(values)?;
+            s.push('\n');
+            s
+        }
+        Format::Toml => toml::to_string_pretty(values)?,
+    })
 }
 
 fn duplicate(project: String, from: String, to: String) -> Result<()> {
