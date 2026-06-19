@@ -332,12 +332,12 @@ devsecrets env delete -p <project> <name>
 ```sh
 devsecrets secret set    -p <project> -e <env> <KEY> <VALUE>
 devsecrets secret get    -p <project> -e <env> <KEY> [--raw]
-devsecrets secret list   -p <project> -e <env> [--show]
+devsecrets secret list   -p <project> -e <env> [--mask]
 devsecrets secret delete -p <project> -e <env> <KEY>
 ```
 
-By default `get` resolves references and `list` masks values; use `--raw` /
-`--show` respectively to see literal values.
+`get` resolves references by default (use `--raw` for the literal value).
+`list` shows values by default; pass `--mask` to obscure them.
 
 ### Import & export
 
@@ -412,6 +412,49 @@ of a new secret), type `${` to pop up a fuzzy-filterable list of available
 secrets. Use `↑`/`↓`/`Tab` to choose and `Enter` to insert the right form
 (`${SECRET}` / `${env.SECRET}` / `${project.env.SECRET}` depending on where it
 lives); `Esc` dismisses the popup.
+
+**Display:** references aren't secret, so the TUI shows them in clear as
+`ref:project.env.key` (e.g. `AUTH = ref:shared.TOKEN`) instead of masking
+them, while ordinary values stay masked until you press `s`.
+
+---
+
+## Loading secrets into your shell (direnv)
+
+Because `devsecrets export` writes a standard `.env` (and, after
+`devsecrets setup`, needs no arguments inside an assigned folder), it drops
+straight into [direnv](https://direnv.net/).
+
+Add an `.envrc` to your project folder:
+
+```sh
+# .envrc — regenerate .env from dev-secrets and load it
+devsecrets export .env
+dotenv .env
+```
+
+Then:
+
+```sh
+echo '.env' >> .gitignore   # don't commit the generated file
+direnv allow
+```
+
+Now every time you `cd` into the project, direnv refreshes `.env` from the
+folder's assigned project/environment and loads the variables into your shell;
+they're unloaded when you leave.
+
+Prefer not to write a file? Load straight from stdout instead:
+
+```sh
+# .envrc
+set -a                       # export everything that follows
+eval "$(devsecrets export)"  # uses this folder's assigned project/env
+set +a
+```
+
+The same `devsecrets export .env` line works in a `Makefile`, a container
+entrypoint, or a CI step.
 
 ---
 

@@ -324,13 +324,17 @@ fn secret(action: SecretAction) -> Result<()> {
                 );
             }
         }
-        SecretAction::List { project, env, show } => {
+        SecretAction::List {
+            project,
+            env,
+            mask: masked,
+        } => {
             let e = env_ref(&handle, &project, &env)?;
             for (key, value) in &e.values {
-                if show {
-                    println!("{key}={value}");
-                } else {
+                if masked {
                     println!("{key}={}", mask(value));
+                } else {
+                    println!("{key}={value}");
                 }
             }
         }

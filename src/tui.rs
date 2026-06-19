@@ -1969,12 +1969,16 @@ impl App {
                 .and_then(|e| e.values.get_index(idx))
                 .map(|(_, v)| v.clone())
                 .unwrap_or_default();
-            let shown = if self.reveal { v } else { mask(&v) };
+            let value_style = if is_reference(&v) {
+                Style::default().fg(Color::Blue)
+            } else {
+                Style::default().fg(Color::Gray)
+            };
             items.push(ListItem::new(highlight_line(
                 name,
                 &matches,
-                format!("  = {shown}"),
-                Style::default().fg(Color::Gray),
+                format!("  = {}", display_value(&v, self.reveal)),
+                value_style,
             )));
         }
 
@@ -2095,11 +2099,15 @@ impl App {
         let name = self.current_env_name().unwrap_or_default();
         let mut lines = vec![heading(&name), Line::from("")];
         for (k, v) in &e.values {
-            let shown = if self.reveal { v.clone() } else { mask(v) };
+            let value_style = if is_reference(v) {
+                Style::default().fg(Color::Blue)
+            } else {
+                Style::default().fg(Color::Gray)
+            };
             lines.push(Line::from(vec![
                 Span::styled(k.clone(), Style::default().fg(Color::Yellow)),
                 Span::raw(" = "),
-                Span::styled(shown, Style::default().fg(Color::Gray)),
+                Span::styled(display_value(v, self.reveal), value_style),
             ]));
         }
         if e.values.is_empty() {
@@ -2129,13 +2137,17 @@ impl App {
             .cloned()
             .unwrap_or_default();
         let mut lines = vec![heading(&key), Line::from("")];
-        let display_raw = if self.reveal { raw.clone() } else { mask(&raw) };
+        let value_style = if is_reference(&raw) {
+            Style::default().fg(Color::Blue)
+        } else {
+            Style::default().fg(Color::White)
+        };
         lines.push(Line::from(vec![
             Span::styled("value: ", Style::default().fg(Color::Gray)),
-            Span::raw(display_raw),
+            Span::styled(display_value(&raw, self.reveal), value_style),
         ]));
         // If the value contains references, show the resolved result too.
-        if raw.contains("${") {
+        if is_reference(&raw) {
             match resolve::resolve_at(&self.handle.store, &project, &env, &key) {
                 Ok(resolved) => {
                     let shown = if self.reveal {
@@ -2509,6 +2521,45 @@ fn mask(value: &str) -> String {
     } else {
         let head: String = value.chars().take(2).collect();
         format!("{head}{}", "•".repeat(6))
+    }
+}
+
+/// Whether a value contains at least one `${…}` reference.
+fn is_reference(value: &str) -> bool {
+    value.contains("${")
+}
+
+/// Render `${a.b.c}` references as the friendlier `ref:a.b.c`, leaving the
+/// surrounding literal text intact.
+fn ref_display(raw: &str) -> String {
+    let mut out = String::with_capacity(raw.len());
+    let mut rest = raw;
+    while let Some(start) = rest.find("${") {
+        out.push_str(&rest[..start]);
+        let after = &rest[start + 2..];
+        if let Some(end) = after.find('}') {
+            out.push_str("ref:");
+            out.push_str(&after[..end]);
+            rest = &after[end + 1..];
+        } else {
+            out.push_str(&rest[start..]);
+            return out;
+        }
+    }
+    out.push_str(rest);
+    out
+}
+
+/// How a secret value is shown in the UI: references are revealed as
+/// `ref:project.env.key` (they aren't secret), other values are masked unless
+/// `reveal` is set.
+fn display_value(raw: &str, reveal: bool) -> String {
+    if is_reference(raw) {
+        ref_display(raw)
+    } else if reveal {
+        raw.to_string()
+    } else {
+        mask(raw)
     }
 }
 

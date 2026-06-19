@@ -170,15 +170,15 @@ pub enum SecretAction {
         #[arg(long)]
         raw: bool,
     },
-    /// List secrets in an environment.
+    /// List secrets in an environment (values shown by default).
     List {
         #[arg(short, long)]
         project: String,
         #[arg(short, long)]
         env: String,
-        /// Reveal values instead of masking them.
+        /// Mask values instead of showing them.
         #[arg(long)]
-        show: bool,
+        mask: bool,
     },
     /// Delete a secret.
     Delete {
