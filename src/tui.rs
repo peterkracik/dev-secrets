@@ -87,6 +87,29 @@ struct ConfirmState {
     action: ConfirmAction,
 }
 
+/// How an import applies the file to the environment.
+#[derive(Clone, Copy)]
+enum ImportMode {
+    /// Add new keys; confirm each changed key individually.
+    Merge,
+    /// Add new keys and overwrite every changed key without asking.
+    OverwriteAll,
+    /// Clear the environment first, then load only the file's keys.
+    Replace,
+}
+
+/// A running import that asks per changed key whether to overwrite it. New
+/// keys are added up front; only conflicts (existing key, different value) are
+/// queued here.
+struct ImportSession {
+    source: String,
+    /// Conflicts still to decide: (key, old_value, new_value).
+    conflicts: Vec<(String, String, String)>,
+    pos: usize,
+    added: usize,
+    updated: usize,
+}
+
 /// A minimal in-app multi-line editor for a whole environment, shown as a
 /// `.env` document. Lines are edited directly; on save the text is parsed
 /// back and replaces the environment's contents.
@@ -200,6 +223,10 @@ pub struct App {
     /// Active two-field new-secret form, if any.
     kv_input: Option<KvInputState>,
     confirm: Option<ConfirmState>,
+    /// Path awaiting a merge/overwrite/replace choice for import, if any.
+    import_choice: Option<String>,
+    /// Active per-key import confirmation session, if any.
+    import_session: Option<ImportSession>,
     /// Active in-app full-environment editor, if any.
     editor: Option<EnvEditor>,
     /// Set when the user asks to edit the current environment in `$EDITOR`.
@@ -237,6 +264,8 @@ impl App {
             input: None,
             kv_input: None,
             confirm: None,
+            import_choice: None,
+            import_session: None,
             editor: None,
             pending_editor: false,
             should_quit: false,
@@ -365,6 +394,12 @@ impl App {
         }
         if self.confirm.is_some() {
             return self.on_confirm_key(key);
+        }
+        if self.import_choice.is_some() {
+            return self.on_import_choice_key(key);
+        }
+        if self.import_session.is_some() {
+            return self.on_import_session_key(key);
         }
         if self.show_help {
             self.show_help = false;
@@ -977,7 +1012,8 @@ impl App {
                 }
             }
             InputAction::Import => {
-                self.do_import(&value);
+                // Defer until the user picks merge vs replace.
+                self.import_choice = Some(value);
             }
             InputAction::Export => {
                 self.do_export(&value);
@@ -997,7 +1033,36 @@ impl App {
             .get_mut(&env)
     }
 
-    fn do_import(&mut self, path: &str) {
+    /// Keys for the import-mode chooser: merge / overwrite-all / replace.
+    fn on_import_choice_key(&mut self, key: KeyEvent) -> Result<()> {
+        match key.code {
+            KeyCode::Char('m') | KeyCode::Char('M') | KeyCode::Enter => {
+                if let Some(path) = self.import_choice.take() {
+                    self.begin_import(&path, ImportMode::Merge);
+                }
+            }
+            KeyCode::Char('o') | KeyCode::Char('O') => {
+                if let Some(path) = self.import_choice.take() {
+                    self.begin_import(&path, ImportMode::OverwriteAll);
+                }
+            }
+            KeyCode::Char('r') | KeyCode::Char('R') => {
+                if let Some(path) = self.import_choice.take() {
+                    self.begin_import(&path, ImportMode::Replace);
+                }
+            }
+            _ => {
+                self.import_choice = None;
+                self.status = "Import cancelled.".into();
+            }
+        }
+        Ok(())
+    }
+
+    /// Read + parse the file and apply it according to `mode`. For `Merge`,
+    /// new keys are added immediately and changed keys are queued for per-key
+    /// confirmation.
+    fn begin_import(&mut self, path: &str, mode: ImportMode) {
         let text = match std::fs::read_to_string(path) {
             Ok(t) => t,
             Err(e) => {
@@ -1006,13 +1071,127 @@ impl App {
             }
         };
         let parsed = envfile::parse(&text);
-        let count = parsed.len();
-        if let Some(e) = self.current_env_mut() {
-            for (k, v) in parsed {
-                e.values.insert(k, v);
+        let Some(env) = self.current_env_mut() else {
+            self.status = "No environment selected.".into();
+            return;
+        };
+
+        match mode {
+            ImportMode::Replace => {
+                let count = parsed.len();
+                env.values.clear();
+                env.values.extend(parsed);
+                self.save();
+                self.status = format!("Imported {count} secrets from {path} (replaced env).");
             }
-            self.save();
-            self.status = format!("Imported {count} secrets from {path}.");
+            ImportMode::OverwriteAll => {
+                let count = parsed.len();
+                for (k, v) in parsed {
+                    env.values.insert(k, v);
+                }
+                self.save();
+                self.status = format!("Imported {count} secrets from {path} (overwrote all).");
+            }
+            ImportMode::Merge => {
+                let mut added = 0;
+                let mut conflicts = Vec::new();
+                for (k, v) in parsed {
+                    match env.values.get(&k) {
+                        None => {
+                            env.values.insert(k, v);
+                            added += 1;
+                        }
+                        Some(old) if *old != v => {
+                            conflicts.push((k, old.clone(), v));
+                        }
+                        Some(_) => {} // unchanged
+                    }
+                }
+                self.save();
+                if conflicts.is_empty() {
+                    self.status = format!(
+                        "Imported {added} new secrets from {path} (no changes to existing)."
+                    );
+                } else {
+                    self.import_session = Some(ImportSession {
+                        source: path.to_string(),
+                        conflicts,
+                        pos: 0,
+                        added,
+                        updated: 0,
+                    });
+                }
+            }
+        }
+    }
+
+    /// Keys while confirming each changed key during a merge import.
+    fn on_import_session_key(&mut self, key: KeyEvent) -> Result<()> {
+        let Some(session) = self.import_session.as_mut() else {
+            return Ok(());
+        };
+        match key.code {
+            KeyCode::Char('y') | KeyCode::Char('Y') | KeyCode::Enter => {
+                let (k, _, new) = session.conflicts[session.pos].clone();
+                if let Some(e) = self.current_env_mut() {
+                    e.values.insert(k, new);
+                }
+                if let Some(s) = self.import_session.as_mut() {
+                    s.updated += 1;
+                    s.pos += 1;
+                }
+                self.advance_import();
+            }
+            KeyCode::Char('n') | KeyCode::Char('N') => {
+                if let Some(s) = self.import_session.as_mut() {
+                    s.pos += 1;
+                }
+                self.advance_import();
+            }
+            KeyCode::Char('a') | KeyCode::Char('A') => {
+                // Overwrite this and every remaining conflict.
+                let rest: Vec<(String, String)> = session.conflicts[session.pos..]
+                    .iter()
+                    .map(|(k, _, new)| (k.clone(), new.clone()))
+                    .collect();
+                let n = rest.len();
+                if let Some(e) = self.current_env_mut() {
+                    for (k, v) in rest {
+                        e.values.insert(k, v);
+                    }
+                }
+                if let Some(s) = self.import_session.as_mut() {
+                    s.updated += n;
+                    s.pos = s.conflicts.len();
+                }
+                self.advance_import();
+            }
+            KeyCode::Char('q') | KeyCode::Char('Q') | KeyCode::Esc => {
+                if let Some(s) = self.import_session.as_mut() {
+                    s.pos = s.conflicts.len();
+                }
+                self.advance_import();
+            }
+            _ => {}
+        }
+        Ok(())
+    }
+
+    /// Finish the import session if all conflicts have been decided.
+    fn advance_import(&mut self) {
+        let done = self
+            .import_session
+            .as_ref()
+            .map(|s| s.pos >= s.conflicts.len())
+            .unwrap_or(true);
+        if done {
+            if let Some(s) = self.import_session.take() {
+                self.save();
+                self.status = format!(
+                    "Imported from {}: {} added, {} updated.",
+                    s.source, s.added, s.updated
+                );
+            }
         }
     }
 
@@ -1153,9 +1332,7 @@ impl App {
                 ed.insert_char(' ');
                 ed.insert_char(' ');
             }
-            KeyCode::Char(c) if !key.modifiers.contains(KeyModifiers::CONTROL) => {
-                ed.insert_char(c)
-            }
+            KeyCode::Char(c) if !key.modifiers.contains(KeyModifiers::CONTROL) => ed.insert_char(c),
             _ => {}
         }
         Ok(())
@@ -1239,6 +1416,12 @@ impl App {
         if let Some(confirm) = &self.confirm {
             self.draw_confirm(f, confirm);
         }
+        if let Some(path) = &self.import_choice {
+            self.draw_import_choice(f, path);
+        }
+        if let Some(session) = &self.import_session {
+            self.draw_import_session(f, session);
+        }
         if let Some(editor) = &self.editor {
             self.draw_editor(f, editor);
         }
@@ -1300,9 +1483,7 @@ impl App {
                     Style::default().fg(Color::Gray),
                 ),
             ]))
-            .title_bottom(
-                Line::from(format!(" {} ", self.status)).left_aligned(),
-            )
+            .title_bottom(Line::from(format!(" {} ", self.status)).left_aligned())
             .title_bottom(
                 Line::from(Span::styled(
                     " / search · n new · e edit · c copy · d del · ? help · q quit ",
@@ -1360,7 +1541,12 @@ impl App {
                 .map(|(_, m)| m)
                 .unwrap_or_default();
             let (suffix, suffix_style) = self.result_suffix(idx);
-            items.push(ListItem::new(highlight_line(name, &matches, suffix, suffix_style)));
+            items.push(ListItem::new(highlight_line(
+                name,
+                &matches,
+                suffix,
+                suffix_style,
+            )));
         }
 
         let title = format!(" Results  {}/{} ", filtered.len(), labels.len());
@@ -1407,7 +1593,10 @@ impl App {
                     .get_index(idx)
                     .map(|(_, p)| p.environments.len())
                     .unwrap_or(0);
-                (format!("  {count} env"), Style::default().fg(Color::DarkGray))
+                (
+                    format!("  {count} env"),
+                    Style::default().fg(Color::DarkGray),
+                )
             }
             Focus::Envs => {
                 let p = self.current_project();
@@ -1447,7 +1636,9 @@ impl App {
             Focus::Secrets => self.preview_secret(),
         };
         f.render_widget(
-            Paragraph::new(lines).block(block).wrap(Wrap { trim: false }),
+            Paragraph::new(lines)
+                .block(block)
+                .wrap(Wrap { trim: false }),
             area,
         );
     }
@@ -1556,7 +1747,11 @@ impl App {
         if raw.contains("${") {
             match resolve::resolve_at(&self.handle.store, &project, &env, &key) {
                 Ok(resolved) => {
-                    let shown = if self.reveal { resolved } else { mask(&resolved) };
+                    let shown = if self.reveal {
+                        resolved
+                    } else {
+                        mask(&resolved)
+                    };
                     lines.push(Line::from(vec![
                         Span::styled("resolved: ", Style::default().fg(Color::Gray)),
                         Span::styled(shown, Style::default().fg(Color::Green)),
@@ -1578,7 +1773,11 @@ impl App {
 
     /// The bottom prompt box with the fuzzy query.
     fn draw_prompt(&self, f: &mut Frame, area: Rect) {
-        let border = if self.searching { ACCENT } else { Color::DarkGray };
+        let border = if self.searching {
+            ACCENT
+        } else {
+            Color::DarkGray
+        };
         let block = Block::default()
             .borders(Borders::ALL)
             .border_type(BorderType::Rounded)
@@ -1646,7 +1845,9 @@ impl App {
 
         let field = |label: &str, value: &str, active: bool| -> Line {
             let label_style = if active {
-                Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD)
+                Style::default()
+                    .fg(Color::Cyan)
+                    .add_modifier(Modifier::BOLD)
             } else {
                 Style::default().fg(Color::Gray)
             };
@@ -1687,6 +1888,72 @@ impl App {
         ])
         .block(block)
         .wrap(Wrap { trim: true });
+        f.render_widget(inner, area);
+    }
+
+    fn draw_import_choice(&self, f: &mut Frame, path: &str) {
+        let area = centered_rect(64, 9, f.area());
+        f.render_widget(Clear, area);
+        let block = Block::default()
+            .borders(Borders::ALL)
+            .border_style(Style::default().fg(ACCENT))
+            .title(" Import .env ");
+        let inner = Paragraph::new(vec![
+            Line::from(Span::styled(
+                format!("From {path}"),
+                Style::default().fg(Color::Gray),
+            )),
+            Line::from(""),
+            Line::from("  m  merge — add new, confirm each changed key"),
+            Line::from("  o  overwrite — add new, replace all changed keys"),
+            Line::from("  r  replace — clear the env, then load the file"),
+            Line::from(Span::styled(
+                "  Esc  cancel",
+                Style::default().fg(Color::DarkGray),
+            )),
+        ])
+        .block(block)
+        .wrap(Wrap { trim: false });
+        f.render_widget(inner, area);
+    }
+
+    fn draw_import_session(&self, f: &mut Frame, s: &ImportSession) {
+        let area = centered_rect(70, 10, f.area());
+        f.render_widget(Clear, area);
+        let (key, old, new) = &s.conflicts[s.pos];
+        let block = Block::default()
+            .borders(Borders::ALL)
+            .border_style(Style::default().fg(ACCENT))
+            .title(format!(
+                " Overwrite changed key ({}/{}) ",
+                s.pos + 1,
+                s.conflicts.len()
+            ));
+        let shown_old = if self.reveal { old.clone() } else { mask(old) };
+        let shown_new = if self.reveal { new.clone() } else { mask(new) };
+        let inner = Paragraph::new(vec![
+            Line::from(Span::styled(
+                key.clone(),
+                Style::default()
+                    .fg(Color::Yellow)
+                    .add_modifier(Modifier::BOLD),
+            )),
+            Line::from(vec![
+                Span::styled("old: ", Style::default().fg(Color::Gray)),
+                Span::raw(shown_old),
+            ]),
+            Line::from(vec![
+                Span::styled("new: ", Style::default().fg(Color::Gray)),
+                Span::styled(shown_new, Style::default().fg(Color::Green)),
+            ]),
+            Line::from(""),
+            Line::from(Span::styled(
+                "y overwrite · n keep · a overwrite all · q stop",
+                Style::default().fg(Color::DarkGray),
+            )),
+        ])
+        .block(block)
+        .wrap(Wrap { trim: false });
         f.render_widget(inner, area);
     }
 
@@ -1742,7 +2009,12 @@ fn window_area(area: Rect) -> Rect {
 
 /// Build a result line: `name` with matched characters highlighted, followed
 /// by a styled `suffix`.
-fn highlight_line(name: &str, matches: &[usize], suffix: String, suffix_style: Style) -> Line<'static> {
+fn highlight_line(
+    name: &str,
+    matches: &[usize],
+    suffix: String,
+    suffix_style: Style,
+) -> Line<'static> {
     let mut spans = Vec::new();
     for (i, ch) in name.chars().enumerate() {
         let style = if matches.contains(&i) {
@@ -1788,7 +2060,11 @@ fn mask(value: &str) -> String {
 }
 
 /// Build the `.env` document shown to the user in their editor.
-fn editor_template(project: &str, env: &str, values: &indexmap::IndexMap<String, String>) -> String {
+fn editor_template(
+    project: &str,
+    env: &str,
+    values: &indexmap::IndexMap<String, String>,
+) -> String {
     let mut out = String::new();
     out.push_str(&format!("# dev-secrets — editing {project}/{env}\n"));
     out.push_str("# Edit as a normal .env file: KEY=VALUE per line.\n");
@@ -1816,8 +2092,18 @@ fn editor_command() -> String {
     std::env::var("VISUAL")
         .ok()
         .filter(|s| !s.trim().is_empty())
-        .or_else(|| std::env::var("EDITOR").ok().filter(|s| !s.trim().is_empty()))
-        .unwrap_or_else(|| if cfg!(windows) { "notepad".into() } else { "vi".into() })
+        .or_else(|| {
+            std::env::var("EDITOR")
+                .ok()
+                .filter(|s| !s.trim().is_empty())
+        })
+        .unwrap_or_else(|| {
+            if cfg!(windows) {
+                "notepad".into()
+            } else {
+                "vi".into()
+            }
+        })
 }
 
 /// Spawn the editor on `path` and wait. Returns `Ok(true)` if the editor
@@ -1885,7 +2171,10 @@ mod tests {
         let mut values = IndexMap::new();
         values.insert("DB_HOST".to_string(), "localhost".to_string());
         values.insert("TOKEN".to_string(), "with space".to_string());
-        values.insert("API_URL".to_string(), "http://${api.dev.DB_HOST}:5432".to_string());
+        values.insert(
+            "API_URL".to_string(),
+            "http://${api.dev.DB_HOST}:5432".to_string(),
+        );
 
         let doc = editor_template("api", "dev", &values);
         // Header lines are comments and must be ignored on parse.

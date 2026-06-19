@@ -57,7 +57,6 @@ impl Store {
             .values
             .get(key)
     }
-
 }
 
 impl Project {

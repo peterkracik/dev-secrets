@@ -56,11 +56,16 @@ pub enum Command {
     Import {
         /// Path to the .env file to read.
         file: PathBuf,
+        /// Project to import into. Defaults to the project assigned to this folder.
         #[arg(short, long)]
-        project: String,
+        project: Option<String>,
+        /// Environment to import into. Defaults to the folder's assigned env.
         #[arg(short, long)]
-        env: String,
-        /// Replace the environment contents instead of merging.
+        env: Option<String>,
+        /// Overwrite every changed key without asking (still keeps other keys).
+        #[arg(long)]
+        overwrite: bool,
+        /// Replace the environment completely (clear it, then load the file).
         #[arg(long)]
         replace: bool,
     },

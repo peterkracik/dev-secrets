@@ -1,7 +1,7 @@
 //! Implementations of the non-interactive CLI subcommands.
 
 use std::fs;
-use std::io::{IsTerminal, Write};
+use std::io::IsTerminal;
 use std::path::PathBuf;
 
 use anyhow::{bail, Context, Result};
@@ -25,8 +25,9 @@ pub fn run(command: Command) -> Result<()> {
             file,
             project,
             env,
+            overwrite,
             replace,
-        } => import(file, project, env, replace),
+        } => import(file, project, env, overwrite, replace),
         Command::Export {
             file,
             project,
@@ -116,7 +117,8 @@ fn settings(action: Option<SettingsAction>) -> Result<()> {
                     .with_context(|| format!("creating {}", parent.display()))?;
             }
             // Move existing data to the new location if there is any.
-            if old_path.exists() && !new_path.exists() && fs::rename(&old_path, &new_path).is_err() {
+            if old_path.exists() && !new_path.exists() && fs::rename(&old_path, &new_path).is_err()
+            {
                 fs::copy(&old_path, &new_path).with_context(|| {
                     format!("copying {} to {}", old_path.display(), new_path.display())
                 })?;
@@ -132,97 +134,70 @@ fn settings(action: Option<SettingsAction>) -> Result<()> {
     Ok(())
 }
 
-/// Read a trimmed line of input after printing `msg`.
-fn prompt(msg: &str) -> Result<String> {
-    print!("{msg}");
-    std::io::stdout().flush()?;
-    let mut line = String::new();
-    std::io::stdin().read_line(&mut line)?;
-    Ok(line.trim().to_string())
-}
+const CREATE_NEW: &str = "➕  Create new…";
 
-/// Wizard step 1: select an existing project by number or create a new one
-/// by typing its name. Returns the chosen project's name.
-fn wizard_project(handle: &mut StoreHandle) -> Result<String> {
-    println!("\nStep 1/2 — Project");
-    let names: Vec<String> = handle.store.projects.keys().cloned().collect();
-    if names.is_empty() {
-        println!("  (no projects yet)");
+/// Choose an existing name from `existing` or create a new one, using
+/// dialoguer. Returns the chosen/created name.
+fn pick_or_create(label: &str, existing: &[String]) -> Result<String> {
+    use dialoguer::{theme::ColorfulTheme, Input, Select};
+    let theme = ColorfulTheme::default();
+
+    if existing.is_empty() {
+        let name: String = Input::with_theme(&theme)
+            .with_prompt(format!("New {label} name"))
+            .interact_text()?;
+        return Ok(name.trim().to_string());
+    }
+
+    let mut items: Vec<String> = existing.to_vec();
+    items.push(CREATE_NEW.to_string());
+    let choice = Select::with_theme(&theme)
+        .with_prompt(format!("Select a {label}"))
+        .items(&items)
+        .default(0)
+        .interact()?;
+
+    if choice == existing.len() {
+        let name: String = Input::with_theme(&theme)
+            .with_prompt(format!("New {label} name"))
+            .interact_text()?;
+        Ok(name.trim().to_string())
     } else {
-        for (i, n) in names.iter().enumerate() {
-            println!("  {}) {}", i + 1, n);
-        }
-    }
-    loop {
-        let input = prompt("Select a number, or type a new project name: ")?;
-        if input.is_empty() {
-            continue;
-        }
-        if let Some(name) = pick_by_number(&input, &names) {
-            return Ok(name);
-        }
-        if handle.store.projects.contains_key(&input) {
-            println!("Project `{input}` already exists — selecting it.");
-            return Ok(input);
-        }
-        handle
-            .store
-            .projects
-            .insert(input.clone(), Project::default());
-        println!("Created project `{input}`.");
-        return Ok(input);
+        Ok(existing[choice].clone())
     }
 }
 
-/// Wizard step 2: select or create an environment within `project`.
+/// Wizard step 1: pick or create a project. Returns its name.
+fn wizard_project(handle: &mut StoreHandle) -> Result<String> {
+    let names: Vec<String> = handle.store.projects.keys().cloned().collect();
+    let name = pick_or_create("project", &names)?;
+    if name.is_empty() {
+        bail!("project name cannot be empty");
+    }
+    handle.store.projects.entry(name.clone()).or_default();
+    Ok(name)
+}
+
+/// Wizard step 2: pick or create an environment within `project`.
 fn wizard_env(handle: &mut StoreHandle, project: &str) -> Result<String> {
-    println!("\nStep 2/2 — Environment in `{project}`");
     let names: Vec<String> = handle
         .store
         .project(project)
         .map(|p| p.environments.keys().cloned().collect())
         .unwrap_or_default();
-    if names.is_empty() {
-        println!("  (no environments yet)");
-    } else {
-        for (i, n) in names.iter().enumerate() {
-            println!("  {}) {}", i + 1, n);
-        }
+    let name = pick_or_create("environment", &names)?;
+    if name.is_empty() {
+        bail!("environment name cannot be empty");
     }
-    loop {
-        let input = prompt("Select a number, or type a new environment name: ")?;
-        if input.is_empty() {
-            continue;
-        }
-        if let Some(name) = pick_by_number(&input, &names) {
-            return Ok(name);
-        }
-        let proj = handle
-            .store
-            .project_mut(project)
-            .context("project disappeared")?;
-        if proj.environments.contains_key(&input) {
-            println!("Environment `{input}` already exists — selecting it.");
-            return Ok(input);
-        }
-        proj.environments
-            .insert(input.clone(), Environment::default());
-        if proj.default_env.is_none() {
-            proj.default_env = Some(input.clone());
-        }
-        println!("Created environment `{input}`.");
-        return Ok(input);
+    let proj = handle
+        .store
+        .project_mut(project)
+        .context("project disappeared")?;
+    proj.environments.entry(name.clone()).or_default();
+    if proj.default_env.is_none() {
+        proj.default_env = Some(name.clone());
     }
-}
-
-/// If `input` is a valid 1-based index into `names`, return that name.
-fn pick_by_number(input: &str, names: &[String]) -> Option<String> {
-    let idx: usize = input.parse().ok()?;
-    if idx >= 1 && idx <= names.len() {
-        Some(names[idx - 1].clone())
-    } else {
-        None
-    }
+    Ok(name)
 }
 
 fn project(action: ProjectAction) -> Result<()> {
@@ -371,33 +346,143 @@ fn secret(action: SecretAction) -> Result<()> {
     Ok(())
 }
 
-fn import(file: PathBuf, project: String, env: String, replace: bool) -> Result<()> {
+fn import(
+    file: PathBuf,
+    project: Option<String>,
+    env: Option<String>,
+    overwrite: bool,
+    replace: bool,
+) -> Result<()> {
     let text = fs::read_to_string(&file).with_context(|| format!("reading {}", file.display()))?;
     let parsed = envfile::parse(&text);
 
     let mut handle = StoreHandle::open()?;
-    let proj = handle
-        .store
-        .projects
-        .entry(project.clone())
-        .or_insert_with(Project::default);
-    let environment = proj
-        .environments
-        .entry(env.clone())
-        .or_insert_with(Environment::default);
-    if replace {
-        environment.values.clear();
-    }
-    let count = parsed.len();
-    for (k, v) in parsed {
-        environment.values.insert(k, v);
-    }
+    // Fall back to this folder's assignment when project/env are omitted.
+    let (project, env) = resolve_target(project, env)?;
+
+    let proj = handle.store.projects.entry(project.clone()).or_default();
     if proj.default_env.is_none() {
         proj.default_env = Some(env.clone());
     }
+    let environment = proj.environments.entry(env.clone()).or_default();
+
+    // --replace: clear the environment entirely, then load the file.
+    if replace {
+        let count = parsed.len();
+        environment.values.clear();
+        environment.values.extend(parsed);
+        handle.save()?;
+        println!("Imported {count} secrets into `{project}/{env}` (replaced env).");
+        return Ok(());
+    }
+
+    // Otherwise add new keys, and decide what to do with changed keys.
+    let mut added = 0usize;
+    let mut conflicts: Vec<(String, String)> = Vec::new(); // (key, new_value)
+    for (k, v) in parsed {
+        match environment.values.get(&k) {
+            None => {
+                environment.values.insert(k, v);
+                added += 1;
+            }
+            Some(old) if *old != v => conflicts.push((k, v)),
+            Some(_) => {}
+        }
+    }
+
+    let interactive = std::io::stdin().is_terminal();
+    let mut updated = 0usize;
+    let mut skipped = 0usize;
+    let mut overwrite_rest = overwrite;
+
+    for (key, new_value) in conflicts {
+        let do_update = if overwrite_rest {
+            true
+        } else if !interactive {
+            // No TTY and no --overwrite: keep existing, report at the end.
+            false
+        } else {
+            let old = environment.values.get(&key).cloned().unwrap_or_default();
+            match conflict_choice(&key, &old, &new_value)? {
+                ConflictChoice::Overwrite => true,
+                ConflictChoice::Keep => false,
+                ConflictChoice::OverwriteAll => {
+                    overwrite_rest = true;
+                    true
+                }
+                ConflictChoice::Stop => break,
+            }
+        };
+        if do_update {
+            environment.values.insert(key, new_value);
+            updated += 1;
+        } else {
+            skipped += 1;
+        }
+    }
+
     handle.save()?;
-    println!("Imported {count} secrets into `{project}/{env}`.");
+    println!(
+        "Imported into `{project}/{env}`: {added} added, {updated} updated, {skipped} unchanged."
+    );
+    if skipped > 0 && !interactive && !overwrite {
+        println!("({skipped} existing key(s) left as-is; pass --overwrite to update them.)");
+    }
     Ok(())
+}
+
+enum ConflictChoice {
+    Overwrite,
+    Keep,
+    OverwriteAll,
+    Stop,
+}
+
+/// Ask the user what to do about a single changed key.
+fn conflict_choice(key: &str, old: &str, new: &str) -> Result<ConflictChoice> {
+    use dialoguer::{theme::ColorfulTheme, Select};
+    let prompt = format!("`{key}` differs:\n    old: {old}\n    new: {new}\n  what now?");
+    let items = [
+        "Keep existing",
+        "Overwrite",
+        "Overwrite all remaining",
+        "Stop",
+    ];
+    let choice = Select::with_theme(&ColorfulTheme::default())
+        .with_prompt(prompt)
+        .items(&items)
+        .default(0)
+        .interact()?;
+    Ok(match choice {
+        1 => ConflictChoice::Overwrite,
+        2 => ConflictChoice::OverwriteAll,
+        3 => ConflictChoice::Stop,
+        _ => ConflictChoice::Keep,
+    })
+}
+
+/// Resolve a (project, env) target from explicit args, falling back to the
+/// current folder's assignment. Used by import (and mirrors export's logic).
+fn resolve_target(project: Option<String>, env: Option<String>) -> Result<(String, String)> {
+    let assignment = meta::load()?.get(&meta::current_dir()?).cloned();
+    let project = project
+        .or_else(|| assignment.as_ref().map(|a| a.project.clone()))
+        .context(
+            "no project given and this folder isn't assigned \
+             (run `devsecrets setup` here, or pass --project)",
+        )?;
+    let env = env
+        .or_else(|| {
+            assignment
+                .as_ref()
+                .filter(|a| a.project == project)
+                .map(|a| a.env.clone())
+        })
+        .context(
+            "no environment given and this folder isn't assigned \
+             (run `devsecrets setup` here, or pass --env)",
+        )?;
+    Ok((project, env))
 }
 
 fn export(
@@ -413,13 +498,10 @@ fn export(
 
     let project = match project {
         Some(p) => p,
-        None => assignment
-            .as_ref()
-            .map(|a| a.project.clone())
-            .context(
-                "no project given and this folder isn't assigned \
+        None => assignment.as_ref().map(|a| a.project.clone()).context(
+            "no project given and this folder isn't assigned \
                  (run `devsecrets setup` here, or pass --project)",
-            )?,
+        )?,
     };
 
     let proj = handle

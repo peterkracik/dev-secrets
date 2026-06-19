@@ -270,6 +270,19 @@ Either way, add/change/reorder/remove lines freely; on save the document is
 parsed back and replaces the environment's contents. References like
 `${project.env.KEY}` are preserved verbatim and resolved on export.
 
+### Importing a `.env`
+
+Press `i`, give a path, then choose how to apply it:
+
+- **merge** — add new keys and **confirm each changed key** individually
+  (`y` overwrite · `n` keep · `a` overwrite all · `q` stop);
+- **overwrite** — add new keys and replace every changed key without asking;
+- **replace** — clear the environment first, then load only the file.
+
+The CLI mirrors this: `devsecrets import file.env` prompts per changed key in a
+terminal, or use `--overwrite` / `--replace`. With no terminal (scripts), the
+default leaves existing keys untouched unless you pass `--overwrite`.
+
 ---
 
 ## CLI reference
@@ -316,9 +329,15 @@ By default `get` resolves references and `list` masks values; use `--raw` /
 ### Import & export
 
 ```sh
-# Import a .env file (merges by default; --replace overwrites the env first)
+# Import a .env file. Like export, -p/-e are optional once the folder is
+# assigned (devsecrets setup). New keys are added automatically; for each
+# CHANGED key you're asked whether to overwrite (interactive menu).
+devsecrets import existing.env
 devsecrets import existing.env -p api -e dev
-devsecrets import existing.env -p api -e dev --replace
+
+# Skip the per-key prompts:
+devsecrets import existing.env --overwrite   # overwrite all changed keys
+devsecrets import existing.env --replace     # clear the env, then load the file
 
 # Export to a file
 devsecrets export .env -p api -e dev

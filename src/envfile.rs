@@ -130,7 +130,10 @@ mod tests {
     fn roundtrips_arbitrary_values() {
         let mut map = IndexMap::new();
         // JSON object value
-        map.insert("CONFIG".to_string(), r#"{"host": "db", "port": 5432}"#.to_string());
+        map.insert(
+            "CONFIG".to_string(),
+            r#"{"host": "db", "port": 5432}"#.to_string(),
+        );
         // value containing '='
         map.insert("EQUATION".to_string(), "a=b+c".to_string());
         // multi-line value

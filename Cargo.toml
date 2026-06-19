@@ -13,6 +13,7 @@ path = "src/main.rs"
 [dependencies]
 anyhow = "1"
 clap = { version = "4", features = ["derive"] }
+dialoguer = "0.11"
 dirs = "5"
 indexmap = { version = "2", features = ["serde"] }
 ratatui = "0.29"
