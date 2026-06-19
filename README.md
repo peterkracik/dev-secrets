@@ -188,21 +188,38 @@ it stays scriptable. You can also assign a different folder explicitly:
 `devsecrets setup /path/to/folder`. Inside the TUI, press `f` to assign the
 current folder to the selected project/environment.
 
-### `devsecrets settings` — where secrets are stored
+### `devsecrets version` — where everything lives
 
 ```sh
-devsecrets settings                  # show config locations + folder assignments
-devsecrets settings store ~/Dropbox/devsecrets   # move the store into a folder
-devsecrets settings store ~/secrets/store.json   # or to an exact .json file
+devsecrets version
 ```
 
-`settings store` moves any existing data to the new location and remembers it.
-Putting the store in a synced folder (Dropbox, iCloud, a private Git repo) is an
-easy way to share dev values across your own machines. (Remember: unencrypted —
-local test values only.)
+prints the version plus the config locations and current folder assignments:
 
-The default store location is used automatically the first time you run the app,
-so `settings` is only needed if you want to relocate it.
+```
+devsecrets 0.1.0
+
+Config dir:     ~/.config/devsecrets
+Settings file:  ~/.config/devsecrets/settings.toml
+Meta file:      ~/.config/devsecrets/meta.json
+Store file:     ~/.config/devsecrets/store.json
+
+Folder assignments:
+  /home/you/code/api → api/dev
+```
+
+### Relocating the store
+
+The store file location lives in `settings.toml` as `store_path`. To keep it
+somewhere else (e.g. a synced folder shared across your machines), move the
+file and point `store_path` at the new location:
+
+```toml
+# ~/.config/devsecrets/settings.toml
+store_path = "/home/you/Dropbox/devsecrets/store.json"
+```
+
+(Remember: unencrypted — local test values only.)
 
 ---
 
@@ -302,12 +319,11 @@ default leaves existing keys untouched unless you pass `--overwrite`.
 
 Everything below also works interactively in the TUI.
 
-### Setup & settings
+### Setup & info
 
 ```sh
-devsecrets setup [<folder>]          # assign a folder to a project/env (wizard)
-devsecrets settings                  # show config locations + folder assignments
-devsecrets settings store <path>     # relocate the secrets store file
+devsecrets setup [<folder>]   # assign a folder to a project/env (wizard)
+devsecrets version            # version + config locations + folder assignments
 ```
 
 ### Projects
@@ -514,8 +530,8 @@ round-trip is lossless.
 **What happens if I run a command before `setup`?**
 Everything works — the store is created automatically on first run. `setup`
 only records a folder → project/env assignment so you can drop the
-`--project`/`--env` flags in that folder. Use explicit flags anywhere else,
-and `devsecrets settings store <path>` to relocate the store.
+`--project`/`--env` flags in that folder. Use explicit flags anywhere else, and
+`devsecrets version` to see where the store lives.
 
 ---
 

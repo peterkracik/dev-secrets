@@ -6,7 +6,7 @@ use std::path::PathBuf;
 
 use anyhow::{bail, Context, Result};
 
-use crate::cli::{Command, EnvAction, ProjectAction, SecretAction, SettingsAction};
+use crate::cli::{Command, EnvAction, ProjectAction, SecretAction};
 use crate::config::{self, Settings};
 use crate::meta;
 use crate::model::{Environment, Project};
@@ -17,7 +17,7 @@ use crate::{envfile, resolve};
 pub fn run(command: Command) -> Result<()> {
     match command {
         Command::Setup { folder } => setup(folder),
-        Command::Settings { action } => settings(action),
+        Command::Version => version(),
         Command::Project { action } => project(action),
         Command::Env { action } => env(action),
         Command::Secret { action } => secret(action),
@@ -85,50 +85,22 @@ fn setup(folder: Option<PathBuf>) -> Result<()> {
     Ok(())
 }
 
-/// `devsecrets settings [show|store <path>]`.
-fn settings(action: Option<SettingsAction>) -> Result<()> {
-    match action.unwrap_or(SettingsAction::Show) {
-        SettingsAction::Show => {
-            let settings = config::load()?;
-            let meta = meta::load()?;
-            println!("Config dir:     {}", config::config_dir().display());
-            println!("Settings file:  {}", config::settings_file().display());
-            println!("Meta file:      {}", meta::meta_file().display());
-            println!("Store file:     {}", settings.store_path.display());
-            println!("\nFolder assignments:");
-            if meta.assignments.is_empty() {
-                println!("  (none — run `devsecrets setup` in a project folder)");
-            } else {
-                for (folder, a) in &meta.assignments {
-                    println!("  {folder} → {}/{}", a.project, a.env);
-                }
-            }
-        }
-        SettingsAction::Store { path } => {
-            let new_path = config::store_path_for(&meta::canonical_path(&path)?);
-            let mut settings = config::load()?;
-            let old_path = settings.store_path.clone();
-            if new_path == old_path {
-                println!("Store is already at {}.", new_path.display());
-                return Ok(());
-            }
-            if let Some(parent) = new_path.parent() {
-                fs::create_dir_all(parent)
-                    .with_context(|| format!("creating {}", parent.display()))?;
-            }
-            // Move existing data to the new location if there is any.
-            if old_path.exists() && !new_path.exists() && fs::rename(&old_path, &new_path).is_err()
-            {
-                fs::copy(&old_path, &new_path).with_context(|| {
-                    format!("copying {} to {}", old_path.display(), new_path.display())
-                })?;
-                let _ = fs::remove_file(&old_path);
-            }
-            settings.store_path = new_path.clone();
-            config::save(&settings)?;
-            // Ensure the file exists at the new location.
-            StoreHandle::open_at(new_path.clone())?.save()?;
-            println!("Store is now kept at {}.", new_path.display());
+/// `devsecrets version` — version plus config locations and assignments.
+fn version() -> Result<()> {
+    let settings = config::load()?;
+    let meta = meta::load()?;
+    println!("devsecrets {}", env!("CARGO_PKG_VERSION"));
+    println!();
+    println!("Config dir:     {}", config::config_dir().display());
+    println!("Settings file:  {}", config::settings_file().display());
+    println!("Meta file:      {}", meta::meta_file().display());
+    println!("Store file:     {}", settings.store_path.display());
+    println!("\nFolder assignments:");
+    if meta.assignments.is_empty() {
+        println!("  (none — run `devsecrets setup` in a project folder)");
+    } else {
+        for (folder, a) in &meta.assignments {
+            println!("  {folder} → {}/{}", a.project, a.env);
         }
     }
     Ok(())

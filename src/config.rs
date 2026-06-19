@@ -10,7 +10,7 @@
 //! - `store.json`    — the secrets themselves (default location).
 
 use std::fs;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
@@ -111,15 +111,4 @@ pub fn save(settings: &Settings) -> Result<()> {
     let data = toml::to_string_pretty(settings)?;
     fs::write(&path, data).with_context(|| format!("writing settings {}", path.display()))?;
     Ok(())
-}
-
-/// Resolve a store file path from a user-supplied location. If they pass a
-/// directory we put `store.json` inside it; if they pass a `.json` file we use
-/// it directly.
-pub fn store_path_for(location: &Path) -> PathBuf {
-    if location.extension().map(|e| e == "json").unwrap_or(false) {
-        location.to_path_buf()
-    } else {
-        location.join(DEFAULT_STORE_FILE)
-    }
 }

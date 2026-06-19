@@ -28,11 +28,8 @@ pub enum Command {
         folder: Option<PathBuf>,
     },
 
-    /// Show or change global settings (where the secrets store lives).
-    Settings {
-        #[command(subcommand)]
-        action: Option<SettingsAction>,
-    },
+    /// Show version, config locations, and folder assignments.
+    Version,
 
     /// Manage projects.
     Project {
@@ -108,17 +105,6 @@ pub enum ProjectAction {
     List,
     /// Delete a project and all of its environments.
     Delete { name: String },
-}
-
-#[derive(Subcommand, Debug)]
-pub enum SettingsAction {
-    /// Show current settings and config locations.
-    Show,
-    /// Change where the secrets store file is kept (moving existing data).
-    Store {
-        /// Target directory or `.json` file path.
-        path: PathBuf,
-    },
 }
 
 #[derive(Subcommand, Debug)]
