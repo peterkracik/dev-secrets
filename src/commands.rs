@@ -2,12 +2,13 @@
 
 use std::fs;
 use std::io::{IsTerminal, Write};
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 
 use anyhow::{bail, Context, Result};
 
-use crate::cli::{Command, EnvAction, ProjectAction, SecretAction};
-use crate::config::{self, Config};
+use crate::cli::{Command, EnvAction, ProjectAction, SecretAction, SettingsAction};
+use crate::config::{self, Settings};
+use crate::meta;
 use crate::model::{Environment, Project};
 use crate::store::StoreHandle;
 use crate::{envfile, resolve};
@@ -16,6 +17,7 @@ use crate::{envfile, resolve};
 pub fn run(command: Command) -> Result<()> {
     match command {
         Command::Setup { folder } => setup(folder),
+        Command::Settings { action } => settings(action),
         Command::Project { action } => project(action),
         Command::Env { action } => env(action),
         Command::Secret { action } => secret(action),
@@ -36,28 +38,35 @@ pub fn run(command: Command) -> Result<()> {
     }
 }
 
+/// Assign a folder (default: the current directory) to a project + environment.
 fn setup(folder: Option<PathBuf>) -> Result<()> {
-    let store_path = match folder {
-        Some(f) => config::store_path_for_folder(&f),
-        None => config::default_store_path(),
-    };
-    let cfg = Config {
-        store_path: store_path.clone(),
-    };
-    config::save(&cfg)?;
-
-    // Make sure the store file exists so subsequent runs are clean.
-    let mut handle = StoreHandle::open_at(store_path.clone())?;
+    // Make sure settings + store exist so the rest of the app is happy.
+    if !config::is_initialised() {
+        config::save(&Settings::default())?;
+    }
+    let mut handle = StoreHandle::open()?;
     handle.save()?;
 
-    println!("dev-secrets initialised.");
-    println!("Store location: {}", store_path.display());
+    let dir = match folder {
+        Some(f) => meta::canonical_dir(&f)?,
+        None => meta::current_dir()?,
+    };
 
-    // Without an interactive terminal we cannot run the wizard.
+    let mut m = meta::load()?;
+    if let Some(existing) = m.get(&dir) {
+        println!(
+            "This folder is currently assigned to `{}/{}`.",
+            existing.project, existing.env
+        );
+    }
+
     if !std::io::stdin().is_terminal() {
-        println!("(non-interactive input — skipping project/environment setup)");
+        println!("(non-interactive input — cannot run the setup wizard)");
+        println!("Folder: {dir}");
         return Ok(());
     }
+
+    println!("Configuring folder: {dir}\n");
 
     // Step 1: choose or create a project.
     let project = wizard_project(&mut handle)?;
@@ -65,30 +74,61 @@ fn setup(folder: Option<PathBuf>) -> Result<()> {
     let env = wizard_env(&mut handle, &project)?;
     handle.save()?;
 
-    // Offer to link the current folder so `devsecrets export` works from here.
-    if let Ok(dir) = std::env::current_dir() {
-        let dir = dir.to_string_lossy().into_owned();
-        let already = handle
-            .store
-            .project(&project)
-            .and_then(|p| p.folder.clone())
-            .as_deref()
-            == Some(dir.as_str());
-        if !already {
-            let answer = prompt(&format!("Link this folder to `{project}`?\n  {dir}\n[y/N]: "))?;
-            if answer.eq_ignore_ascii_case("y") {
-                if let Some(p) = handle.store.project_mut(&project) {
-                    p.folder = Some(dir);
+    // Record the folder → (project, env) assignment.
+    m.set(dir.clone(), project.clone(), env.clone());
+    meta::save(&m)?;
+
+    println!("\nSetup complete.");
+    println!("Folder {dir} is now assigned to `{project}/{env}`.");
+    println!("From here you can just run: devsecrets export .env");
+    Ok(())
+}
+
+/// `devsecrets settings [show|store <path>]`.
+fn settings(action: Option<SettingsAction>) -> Result<()> {
+    match action.unwrap_or(SettingsAction::Show) {
+        SettingsAction::Show => {
+            let settings = config::load()?;
+            let meta = meta::load()?;
+            println!("Config dir:     {}", config::config_dir().display());
+            println!("Settings file:  {}", config::settings_file().display());
+            println!("Meta file:      {}", meta::meta_file().display());
+            println!("Store file:     {}", settings.store_path.display());
+            println!("\nFolder assignments:");
+            if meta.assignments.is_empty() {
+                println!("  (none — run `devsecrets setup` in a project folder)");
+            } else {
+                for (folder, a) in &meta.assignments {
+                    println!("  {folder} → {}/{}", a.project, a.env);
                 }
-                handle.save()?;
-                println!("Linked.");
             }
         }
+        SettingsAction::Store { path } => {
+            let new_path = config::store_path_for(&meta::canonical_path(&path)?);
+            let mut settings = config::load()?;
+            let old_path = settings.store_path.clone();
+            if new_path == old_path {
+                println!("Store is already at {}.", new_path.display());
+                return Ok(());
+            }
+            if let Some(parent) = new_path.parent() {
+                fs::create_dir_all(parent)
+                    .with_context(|| format!("creating {}", parent.display()))?;
+            }
+            // Move existing data to the new location if there is any.
+            if old_path.exists() && !new_path.exists() && fs::rename(&old_path, &new_path).is_err() {
+                fs::copy(&old_path, &new_path).with_context(|| {
+                    format!("copying {} to {}", old_path.display(), new_path.display())
+                })?;
+                let _ = fs::remove_file(&old_path);
+            }
+            settings.store_path = new_path.clone();
+            config::save(&settings)?;
+            // Ensure the file exists at the new location.
+            StoreHandle::open_at(new_path.clone())?.save()?;
+            println!("Store is now kept at {}.", new_path.display());
+        }
     }
-
-    println!("\nSetup complete — project `{project}`, environment `{env}`.");
-    println!("Add secrets with: devsecrets secret set -p {project} -e {env} KEY value");
-    println!("Or browse interactively with: devsecrets");
     Ok(())
 }
 
@@ -188,21 +228,14 @@ fn pick_by_number(input: &str, names: &[String]) -> Option<String> {
 fn project(action: ProjectAction) -> Result<()> {
     let mut handle = StoreHandle::open()?;
     match action {
-        ProjectAction::Create { name, folder } => {
+        ProjectAction::Create { name } => {
             if handle.store.projects.contains_key(&name) {
                 bail!("project `{name}` already exists");
             }
-            let folder = match folder {
-                Some(f) => Some(abs_path(&f)?),
-                None => None,
-            };
-            handle.store.projects.insert(
-                name.clone(),
-                Project {
-                    folder,
-                    ..Default::default()
-                },
-            );
+            handle
+                .store
+                .projects
+                .insert(name.clone(), Project::default());
             handle.save()?;
             println!("Created project `{name}`.");
         }
@@ -215,19 +248,6 @@ fn project(action: ProjectAction) -> Result<()> {
             }
             handle.save()?;
             println!("Deleted project `{name}`.");
-        }
-        ProjectAction::SetFolder { name, folder } => {
-            let folder = match folder {
-                Some(f) => abs_path(&f)?,
-                None => abs_path(Path::new("."))?,
-            };
-            let proj = handle
-                .store
-                .project_mut(&name)
-                .with_context(|| format!("project `{name}` not found"))?;
-            proj.folder = Some(folder.clone());
-            handle.save()?;
-            println!("Project `{name}` is now linked to {folder}.");
         }
     }
     Ok(())
@@ -388,27 +408,34 @@ fn export(
 ) -> Result<()> {
     let handle = StoreHandle::open()?;
 
+    // Fall back to this folder's assignment for project/env when not given.
+    let assignment = meta::load()?.get(&meta::current_dir()?).cloned();
+
     let project = match project {
         Some(p) => p,
-        None => {
-            let cwd = abs_path(Path::new("."))?;
-            handle
-                .store
-                .project_for_folder(&cwd)
-                .map(|s| s.to_string())
-                .context(
-                    "no project given and the current folder is not linked to a project \
-                     (use --project or `devsecrets project set-folder`)",
-                )?
-        }
+        None => assignment
+            .as_ref()
+            .map(|a| a.project.clone())
+            .context(
+                "no project given and this folder isn't assigned \
+                 (run `devsecrets setup` here, or pass --project)",
+            )?,
     };
 
     let proj = handle
         .store
         .project(&project)
         .with_context(|| format!("project `{project}` not found"))?;
+
+    // env: explicit flag, else the folder's assigned env (same project), else default.
+    let requested_env = env.or_else(|| {
+        assignment
+            .as_ref()
+            .filter(|a| a.project == project)
+            .map(|a| a.env.clone())
+    });
     let env_name = proj
-        .resolve_env(env.as_deref())
+        .resolve_env(requested_env.as_deref())
         .map(|s| s.to_string())
         .with_context(|| {
             format!("could not determine environment for `{project}` (set a default or pass --env)")
@@ -520,16 +547,4 @@ fn mask(value: &str) -> String {
         let visible: String = value.chars().take(2).collect();
         format!("{visible}{}", "•".repeat(6))
     }
-}
-
-/// Canonicalise a path to an absolute string (the path need not exist).
-fn abs_path(p: &Path) -> Result<String> {
-    let abs = if p.is_absolute() {
-        p.to_path_buf()
-    } else {
-        std::env::current_dir()?.join(p)
-    };
-    // Best-effort canonicalisation; fall back to the joined path.
-    let canonical = fs::canonicalize(&abs).unwrap_or(abs);
-    Ok(canonical.to_string_lossy().into_owned())
 }

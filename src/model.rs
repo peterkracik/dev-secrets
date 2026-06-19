@@ -28,10 +28,6 @@ pub struct Project {
     /// Name of the environment used when none is given on export.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub default_env: Option<String>,
-    /// Optional working directory associated with this project. When
-    /// `devsecrets` runs inside this folder, the project is auto-selected.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub folder: Option<String>,
     #[serde(default)]
     pub environments: IndexMap<String, Environment>,
 }
@@ -62,13 +58,6 @@ impl Store {
             .get(key)
     }
 
-    /// Find the first project whose associated folder matches `dir`.
-    pub fn project_for_folder(&self, dir: &str) -> Option<&str> {
-        self.projects
-            .iter()
-            .find(|(_, p)| p.folder.as_deref() == Some(dir))
-            .map(|(name, _)| name.as_str())
-    }
 }
 
 impl Project {

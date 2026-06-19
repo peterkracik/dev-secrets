@@ -174,7 +174,6 @@ mod tests {
             "p".to_string(),
             Project {
                 default_env: None,
-                folder: None,
                 environments: envs,
             },
         );

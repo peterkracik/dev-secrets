@@ -1,9 +1,13 @@
-//! Application configuration and store-file location handling.
+//! Application settings and store-file location handling.
 //!
-//! The app keeps a tiny config file that points at where the actual data
-//! store lives. By default everything sits under the user's config dir
-//! (`~/.config/dev-secrets`), but `devsecrets setup` lets the user assign a
-//! different folder for the metadata store.
+//! Everything lives under the user's config dir, `~/.config/devsecrets`:
+//!
+//! - `settings.json` — points at where the secrets store file lives. By
+//!   default that is `store.json` in the same directory, but it can be moved
+//!   anywhere (e.g. a synced folder) via `devsecrets settings store <path>`.
+//! - `meta.json`     — folder → (project, environment) assignments (see
+//!   [`crate::meta`]).
+//! - `store.json`    — the secrets themselves (default location).
 
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -11,74 +15,74 @@ use std::path::{Path, PathBuf};
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 
-const APP_DIR: &str = "dev-secrets";
-const CONFIG_FILE: &str = "config.json";
+const APP_DIR: &str = "devsecrets";
+const SETTINGS_FILE: &str = "settings.json";
 const DEFAULT_STORE_FILE: &str = "store.json";
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct Config {
-    /// Absolute path to the data store JSON file.
+pub struct Settings {
+    /// Absolute path to the secrets store JSON file.
     pub store_path: PathBuf,
 }
 
-impl Default for Config {
+impl Default for Settings {
     fn default() -> Self {
-        Config {
+        Settings {
             store_path: default_store_path(),
         }
     }
 }
 
-/// `~/.config/dev-secrets` (falls back to `./.dev-secrets` if no config dir).
+/// `~/.config/devsecrets` (falls back to `./.devsecrets` if no config dir).
 pub fn config_dir() -> PathBuf {
     dirs::config_dir()
         .map(|d| d.join(APP_DIR))
-        .unwrap_or_else(|| PathBuf::from(".dev-secrets"))
+        .unwrap_or_else(|| PathBuf::from(".devsecrets"))
 }
 
-pub fn config_file() -> PathBuf {
-    config_dir().join(CONFIG_FILE)
+pub fn settings_file() -> PathBuf {
+    config_dir().join(SETTINGS_FILE)
 }
 
 pub fn default_store_path() -> PathBuf {
     config_dir().join(DEFAULT_STORE_FILE)
 }
 
-/// Whether the app has been initialised (config file exists).
+/// Whether the app has been initialised (settings file exists).
 pub fn is_initialised() -> bool {
-    config_file().exists()
+    settings_file().exists()
 }
 
-/// Load the config, falling back to defaults when it does not exist yet.
-pub fn load() -> Result<Config> {
-    let path = config_file();
+/// Load settings, falling back to defaults when they do not exist yet.
+pub fn load() -> Result<Settings> {
+    let path = settings_file();
     if !path.exists() {
-        return Ok(Config::default());
+        return Ok(Settings::default());
     }
-    let data =
-        fs::read_to_string(&path).with_context(|| format!("reading config {}", path.display()))?;
-    let cfg: Config = serde_json::from_str(&data)
-        .with_context(|| format!("parsing config {}", path.display()))?;
-    Ok(cfg)
+    let data = fs::read_to_string(&path)
+        .with_context(|| format!("reading settings {}", path.display()))?;
+    let settings: Settings = serde_json::from_str(&data)
+        .with_context(|| format!("parsing settings {}", path.display()))?;
+    Ok(settings)
 }
 
-/// Persist the config, creating the config directory if needed.
-pub fn save(cfg: &Config) -> Result<()> {
+/// Persist settings, creating the config directory if needed.
+pub fn save(settings: &Settings) -> Result<()> {
     let dir = config_dir();
     fs::create_dir_all(&dir).with_context(|| format!("creating config dir {}", dir.display()))?;
-    let path = config_file();
-    let data = serde_json::to_string_pretty(cfg)?;
-    fs::write(&path, data).with_context(|| format!("writing config {}", path.display()))?;
+    let path = settings_file();
+    let data = serde_json::to_string_pretty(settings)?;
+    fs::write(&path, data).with_context(|| format!("writing settings {}", path.display()))?;
     Ok(())
 }
 
-/// Resolve the store directory for a chosen folder. If the user passes a
+/// Resolve a store file path from a user-supplied location. If they pass a
 /// directory we put `store.json` inside it; if they pass a `.json` file we use
 /// it directly.
-pub fn store_path_for_folder(folder: &Path) -> PathBuf {
-    if folder.extension().map(|e| e == "json").unwrap_or(false) {
-        folder.to_path_buf()
+pub fn store_path_for(location: &Path) -> PathBuf {
+    if location.extension().map(|e| e == "json").unwrap_or(false) {
+        location.to_path_buf()
     } else {
-        folder.join(DEFAULT_STORE_FILE)
+        location.join(DEFAULT_STORE_FILE)
     }
 }

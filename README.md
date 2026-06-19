@@ -47,14 +47,15 @@ it fits into scripts and Makefiles just as well as interactive use.
 ## Features
 
 - 🗂️ **Organized by project → environment → secret**, not by folder.
-- 🖥️ **k9s-style TUI** — three master/detail panes, single-key actions, live editing.
+- 🔭 **Telescope-style TUI** — centered floating window, fuzzy search, live preview.
 - ⌨️ **Full CLI parity** — every action is scriptable.
 - 📥 **Import** existing `.env` files (merge or replace).
 - 📤 **Export** any environment to a file or stdout.
 - 🔗 **References**: write `${project.env.KEY}` to reuse a value instead of
   duplicating it. Resolved (recursively, with cycle detection) on export.
-- 📌 **Default environment** per project + **folder linking** so `devsecrets
-  export` "just knows" which project you mean inside a project directory.
+- 📌 **Folder assignments** — `devsecrets setup` binds a folder to a
+  project/env, so `devsecrets export` (and the TUI) "just know" what to use.
+- 📋 **Clipboard** copy of a secret value or a whole environment.
 - 📝 **Plain JSON store** you can read, diff, and back up yourself.
 
 ---
@@ -107,19 +108,17 @@ devsecrets --help
 ## Quick start
 
 ```sh
-# 1. (Optional) choose where the store lives. Skip to use the default.
+# 1. In your project folder, run setup. It walks you through choosing
+#    (or creating) a project and environment, and remembers this folder.
+cd ~/code/api
 devsecrets setup
 
-# 2. Create a project and an environment
-devsecrets project create api
-devsecrets env create -p api dev
-
-# 3. Add some secrets
+# 2. Add some secrets
 devsecrets secret set -p api -e dev DB_HOST localhost
 devsecrets secret set -p api -e dev DB_PORT 5432
 
-# 4. Export them when you need them
-devsecrets export .env -p api -e dev
+# 3. Export them when you need them — no flags, this folder is assigned
+devsecrets export .env
 ```
 
 …or just run the TUI and do all of the above interactively:
@@ -134,68 +133,65 @@ devsecrets
 
 ### Where data is stored
 
-dev-secrets keeps two files under your OS config directory:
+Everything lives under `~/.config/devsecrets/`:
 
-| File          | Purpose                                            |
-|---------------|----------------------------------------------------|
-| `config.json` | Small pointer file — remembers where the store is. |
-| `store.json`  | The actual data (projects, environments, secrets). |
+| File            | Purpose                                                   |
+|-----------------|-----------------------------------------------------------|
+| `settings.json` | Points at where the secrets store file lives.             |
+| `meta.json`     | Folder → (project, environment) assignments (see below).  |
+| `store.json`    | The secrets themselves (default location).                |
 
-The default config directory is platform-specific:
+The config directory is platform-specific:
 
 | OS      | Default location                                      |
 |---------|-------------------------------------------------------|
-| Linux   | `~/.config/dev-secrets/`                              |
-| macOS   | `~/Library/Application Support/dev-secrets/`          |
-| Windows | `%APPDATA%\dev-secrets\`                              |
+| Linux   | `~/.config/devsecrets/`                               |
+| macOS   | `~/Library/Application Support/devsecrets/`           |
+| Windows | `%APPDATA%\devsecrets\`                               |
 
 On Linux/macOS you can override the base directory with the standard
 `XDG_CONFIG_HOME` environment variable.
 
-### `devsecrets setup`
+### `devsecrets setup` — assign a folder
 
-Run `setup` to initialize the app and, optionally, to keep the store
-somewhere other than the default:
+`setup` configures the **current folder**: it asks (the first time) which
+project and environment this folder belongs to, and remembers the
+folder → (project, env) assignment in `meta.json`. From then on, whenever you
+work in that folder, dev-secrets knows what to use — a bare `devsecrets export`
+or launching the TUI jumps straight to the right project/environment.
 
 ```sh
-devsecrets setup                      # use the default location
-devsecrets setup ~/Dropbox/devsecrets # keep store.json in a folder you choose
-devsecrets setup ~/secrets/store.json # or point at an exact file path
+cd ~/code/api
+devsecrets setup        # wizard: pick/create project, then environment
+# ...later, from the same folder:
+devsecrets export .env  # no flags needed — uses this folder's project/env
 ```
 
-- Pass a **directory** → the store is created as `store.json` inside it.
-- Pass a **`.json` file path** → that exact file is used.
+The wizard:
 
-When run in a terminal, `setup` then walks you through a short wizard:
-
-1. **Project** — pick an existing project by number, or type a name to create
-   a new one.
+1. **Project** — pick an existing project by number, or type a name to create one.
 2. **Environment** — pick or create an environment within that project.
 
-Finally it offers to link the current folder to the project (so a bare
-`devsecrets export` works from there). The wizard is skipped automatically
-when input isn't an interactive terminal, so `setup` stays scriptable.
+`setup` is skipped (no-op wizard) when input isn't an interactive terminal, so
+it stays scriptable. You can also assign a different folder explicitly:
+`devsecrets setup /path/to/folder`. Inside the TUI, press `f` to assign the
+current folder to the selected project/environment.
 
-Putting the store in a synced folder (Dropbox, iCloud, a private Git repo,
-etc.) is an easy way to share dev values across your own machines. (Remember:
-unencrypted — local test values only.)
-
-If you never run `setup`, dev-secrets just uses the default location
-automatically the first time you run it.
-
-### Linking a project to a folder
-
-Associate a project with a working directory so `devsecrets export` (with no
-`--project`) auto-selects it when run from there:
+### `devsecrets settings` — where secrets are stored
 
 ```sh
-devsecrets project create api --folder ~/code/api
-# or for an existing project:
-devsecrets project set-folder api ~/code/api
-
-cd ~/code/api
-devsecrets export .env          # knows this is the "api" project
+devsecrets settings                  # show config locations + folder assignments
+devsecrets settings store ~/Dropbox/devsecrets   # move the store into a folder
+devsecrets settings store ~/secrets/store.json   # or to an exact .json file
 ```
+
+`settings store` moves any existing data to the new location and remembers it.
+Putting the store in a synced folder (Dropbox, iCloud, a private Git repo) is an
+easy way to share dev values across your own machines. (Remember: unencrypted —
+local test values only.)
+
+The default store location is used automatically the first time you run the app,
+so `settings` is only needed if you want to relocate it.
 
 ---
 
@@ -228,7 +224,7 @@ Press `/` to fuzzy-filter the current list; type to narrow, `Esc` to clear.
 | `i`             | Import a `.env` file into the selected environment  |
 | `x`             | Export the selected environment to a `.env` file    |
 | `D`             | Set the selected environment as the project default |
-| `f`             | Assign a working folder to the project              |
+| `f`             | Assign the current folder to this project/env       |
 | `s`             | Toggle showing / hiding secret values               |
 | `?`             | Help overlay                                        |
 | `q` / `Ctrl-C`  | Quit                                                |
@@ -268,12 +264,19 @@ parsed back and replaces the environment's contents. References like
 
 Everything below also works interactively in the TUI.
 
+### Setup & settings
+
+```sh
+devsecrets setup [<folder>]          # assign a folder to a project/env (wizard)
+devsecrets settings                  # show config locations + folder assignments
+devsecrets settings store <path>     # relocate the secrets store file
+```
+
 ### Projects
 
 ```sh
-devsecrets project create <name> [--folder <dir>]
+devsecrets project create <name>
 devsecrets project list
-devsecrets project set-folder <name> [<dir>]   # omit <dir> to use current dir
 devsecrets project delete <name>
 ```
 
@@ -311,7 +314,7 @@ devsecrets export .env -p api -e dev
 # Export the project's default environment to stdout
 devsecrets export -p api
 
-# Export, inferring the project from the current folder
+# Export using this folder's assigned project + env (after `devsecrets setup`)
 devsecrets export
 
 # Export raw values (do not resolve ${...} references)
@@ -355,14 +358,13 @@ devsecrets secret get -p api -e dev API_URL
 
 ## How the store looks on disk
 
-It's just JSON — readable, diffable, and easy to back up:
+It's just JSON — readable, diffable, and easy to back up. `store.json`:
 
 ```json
 {
   "projects": {
     "api": {
       "default_env": "dev",
-      "folder": "/home/you/code/api",
       "environments": {
         "dev": {
           "values": {
@@ -372,6 +374,16 @@ It's just JSON — readable, diffable, and easy to back up:
         }
       }
     }
+  }
+}
+```
+
+…and `meta.json` records folder assignments:
+
+```json
+{
+  "assignments": {
+    "/home/you/code/api": { "project": "api", "env": "dev" }
   }
 }
 ```

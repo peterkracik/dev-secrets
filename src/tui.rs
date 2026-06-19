@@ -16,6 +16,7 @@ use ratatui::widgets::{
 use ratatui::{Frame, Terminal};
 
 use crate::fuzzy;
+use crate::meta::{self, Meta};
 use crate::model::{Environment, Project};
 use crate::store::StoreHandle;
 use crate::{envfile, resolve};
@@ -42,7 +43,6 @@ enum InputAction {
     DuplicateEnv { from: String },
     Import,
     Export,
-    SetFolder,
 }
 
 struct InputState {
@@ -183,6 +183,8 @@ impl EnvEditor {
 
 pub struct App {
     handle: StoreHandle,
+    /// Folder → (project, env) assignments, for auto-select and the `f` action.
+    meta: Meta,
     focus: Focus,
     proj_idx: usize,
     env_idx: usize,
@@ -209,7 +211,9 @@ pub struct App {
 /// Entry point: set up the terminal, run the loop, restore on exit.
 pub fn run() -> Result<()> {
     let handle = StoreHandle::open()?;
-    let mut app = App::new(handle);
+    let meta = meta::load().unwrap_or_default();
+    let mut app = App::new(handle, meta);
+    app.select_assigned();
     let mut terminal = ratatui::init();
     let result = app.run_loop(&mut terminal);
     ratatui::restore();
@@ -217,9 +221,10 @@ pub fn run() -> Result<()> {
 }
 
 impl App {
-    fn new(handle: StoreHandle) -> Self {
+    fn new(handle: StoreHandle, meta: Meta) -> Self {
         App {
             handle,
+            meta,
             focus: Focus::Projects,
             proj_idx: 0,
             env_idx: 0,
@@ -317,6 +322,35 @@ impl App {
         }
     }
 
+    /// If the current folder is assigned to a project/env, jump straight to it.
+    fn select_assigned(&mut self) {
+        let Ok(dir) = meta::current_dir() else {
+            return;
+        };
+        let Some(a) = self.meta.get(&dir) else {
+            return;
+        };
+        let (project, env) = (a.project.clone(), a.env.clone());
+        let Some(pi) = self.handle.store.projects.get_index_of(&project) else {
+            return;
+        };
+        self.proj_idx = pi;
+        let ei = self
+            .handle
+            .store
+            .projects
+            .get_index(pi)
+            .and_then(|(_, p)| p.environments.get_index_of(&env));
+        if let Some(ei) = ei {
+            self.env_idx = ei;
+            self.secret_idx = 0;
+            self.focus = Focus::Secrets;
+            self.status = format!("This folder is assigned to {project}/{env}.");
+        } else {
+            self.focus = Focus::Envs;
+        }
+    }
+
     // --- key handling ------------------------------------------------------
 
     fn on_key(&mut self, key: KeyEvent) -> Result<()> {
@@ -401,7 +435,7 @@ impl App {
             (KeyCode::Char('i'), _) => self.start_import(),
             (KeyCode::Char('x'), _) => self.start_export(),
             (KeyCode::Char('D'), _) => self.set_default_env(),
-            (KeyCode::Char('f'), _) => self.start_set_folder(),
+            (KeyCode::Char('f'), _) => self.assign_folder(),
             _ => {}
         }
         Ok(())
@@ -770,21 +804,26 @@ impl App {
         });
     }
 
-    fn start_set_folder(&mut self) {
-        if self.focus != Focus::Projects || self.current_project().is_none() {
-            self.status = "Focus a project to assign its folder.".into();
+    /// Assign the current working directory to the selected project + env.
+    fn assign_folder(&mut self) {
+        let (Some(project), Some(env)) = (self.current_project_name(), self.current_env_name())
+        else {
+            self.status = "Select a project and environment to assign this folder.".into();
+            return;
+        };
+        let dir = match meta::current_dir() {
+            Ok(d) => d,
+            Err(e) => {
+                self.status = format!("Could not resolve current folder: {e}");
+                return;
+            }
+        };
+        self.meta.set(dir.clone(), project.clone(), env.clone());
+        if let Err(e) = meta::save(&self.meta) {
+            self.status = format!("Failed to save assignment: {e}");
             return;
         }
-        let current = self
-            .current_project()
-            .and_then(|p| p.folder.clone())
-            .unwrap_or_default();
-        self.input = Some(InputState {
-            title: "Assign folder".into(),
-            prompt: "Folder path (blank = current dir):".into(),
-            buffer: current,
-            action: InputAction::SetFolder,
-        });
+        self.status = format!("Assigned {dir} → {project}/{env}.");
     }
 
     fn set_default_env(&mut self) {
@@ -943,9 +982,6 @@ impl App {
             InputAction::Export => {
                 self.do_export(&value);
             }
-            InputAction::SetFolder => {
-                self.do_set_folder(&value);
-            }
         }
         self.clamp_indices();
         Ok(())
@@ -1008,38 +1044,6 @@ impl App {
             }
             Err(e) => self.status = format!("Export failed: {e}"),
         }
-    }
-
-    fn do_set_folder(&mut self, raw: &str) {
-        let Some(project) = self.current_project_name() else {
-            return;
-        };
-        let folder = if raw.is_empty() {
-            std::env::current_dir()
-                .ok()
-                .map(|p| p.to_string_lossy().into_owned())
-        } else {
-            let p = std::path::Path::new(raw);
-            let abs = if p.is_absolute() {
-                p.to_path_buf()
-            } else {
-                std::env::current_dir().unwrap_or_default().join(p)
-            };
-            Some(
-                std::fs::canonicalize(&abs)
-                    .unwrap_or(abs)
-                    .to_string_lossy()
-                    .into_owned(),
-            )
-        };
-        if let Some(p) = self.handle.store.project_mut(&project) {
-            p.folder = folder.clone();
-        }
-        self.save();
-        self.status = match folder {
-            Some(f) => format!("Linked `{project}` to {f}."),
-            None => format!("Cleared folder for `{project}`."),
-        };
     }
 
     /// Open the whole current environment in the user's `$EDITOR` as a `.env`
@@ -1456,11 +1460,17 @@ impl App {
             ))];
         };
         let name = self.current_project_name().unwrap_or_default();
+        let folders = self.meta.folders_for_project(&name);
+        let folder_line = if folders.is_empty() {
+            "folders: (none assigned — press f here)".to_string()
+        } else {
+            format!("folders: {}", folders.join(", "))
+        };
         let mut lines = vec![
             heading(&name),
             Line::from(""),
             Line::from(Span::styled(
-                format!("folder: {}", p.folder.as_deref().unwrap_or("(none)")),
+                folder_line,
                 Style::default().fg(Color::DarkGray),
             )),
             Line::from(Span::styled(
@@ -1706,7 +1716,7 @@ impl App {
             Line::from("  i  import a .env file into the selected env"),
             Line::from("  x  export the selected env to a .env file"),
             Line::from("  D  set selected env as the project default"),
-            Line::from("  f  assign a working folder to the project"),
+            Line::from("  f  assign the current folder to this project/env"),
             Line::from("  s  toggle showing/hiding secret values"),
             Line::from(""),
             Line::from("References: a value like ${proj.env.KEY} is resolved on export."),

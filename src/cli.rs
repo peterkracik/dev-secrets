@@ -22,10 +22,16 @@ pub struct Cli {
 
 #[derive(Subcommand, Debug)]
 pub enum Command {
-    /// Initialise dev-secrets and choose where the store is kept.
+    /// Assign the current folder to a project + environment (interactive).
     Setup {
-        /// Folder (or .json file) to store metadata in. Defaults to ~/.config/dev-secrets.
+        /// Folder to configure. Defaults to the current directory.
         folder: Option<PathBuf>,
+    },
+
+    /// Show or change global settings (where the secrets store lives).
+    Settings {
+        #[command(subcommand)]
+        action: Option<SettingsAction>,
     },
 
     /// Manage projects.
@@ -63,10 +69,11 @@ pub enum Command {
     Export {
         /// Output file. If omitted, writes to stdout.
         file: Option<PathBuf>,
-        /// Project to export. Defaults to the project for the current folder.
+        /// Project to export. Defaults to the project assigned to this folder.
         #[arg(short, long)]
         project: Option<String>,
-        /// Environment to export. Defaults to the project's default env.
+        /// Environment to export. Defaults to the folder's assigned env, then
+        /// the project's default env.
         #[arg(short, long)]
         env: Option<String>,
         /// Do not resolve ${project.env.key} references; export raw values.
@@ -91,21 +98,21 @@ pub enum Command {
 #[derive(Subcommand, Debug)]
 pub enum ProjectAction {
     /// Create a new project.
-    Create {
-        name: String,
-        /// Associate a working folder so it is auto-selected from there.
-        #[arg(long)]
-        folder: Option<PathBuf>,
-    },
+    Create { name: String },
     /// List all projects.
     List,
     /// Delete a project and all of its environments.
     Delete { name: String },
-    /// Associate (or clear) a working folder for a project.
-    SetFolder {
-        name: String,
-        /// Folder to associate; omit to use the current directory.
-        folder: Option<PathBuf>,
+}
+
+#[derive(Subcommand, Debug)]
+pub enum SettingsAction {
+    /// Show current settings and config locations.
+    Show,
+    /// Change where the secrets store file is kept (moving existing data).
+    Store {
+        /// Target directory or `.json` file path.
+        path: PathBuf,
     },
 }
 
