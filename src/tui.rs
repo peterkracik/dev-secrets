@@ -28,7 +28,6 @@ enum Focus {
 enum InputAction {
     NewProject,
     NewEnv,
-    NewSecret,
     EditSecret { key: String },
     DuplicateEnv { from: String },
     Import,
@@ -41,6 +40,21 @@ struct InputState {
     prompt: String,
     buffer: String,
     action: InputAction,
+}
+
+/// Which field of the two-field new-secret form is active.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum KvField {
+    Key,
+    Value,
+}
+
+/// Two-field form for adding a secret — separate Key and Value boxes so a
+/// value can be pasted on its own without a `KEY=` prefix.
+struct KvInputState {
+    key: String,
+    value: String,
+    active: KvField,
 }
 
 /// What a confirmation prompt should do when accepted.
@@ -167,6 +181,8 @@ pub struct App {
     show_help: bool,
     status: String,
     input: Option<InputState>,
+    /// Active two-field new-secret form, if any.
+    kv_input: Option<KvInputState>,
     confirm: Option<ConfirmState>,
     /// Active in-app full-environment editor, if any.
     editor: Option<EnvEditor>,
@@ -198,6 +214,7 @@ impl App {
             show_help: false,
             status: "Welcome to dev-secrets. Press ? for help.".to_string(),
             input: None,
+            kv_input: None,
             confirm: None,
             editor: None,
             pending_editor: false,
@@ -290,6 +307,9 @@ impl App {
         if self.editor.is_some() {
             return self.on_editor_key(key);
         }
+        if self.kv_input.is_some() {
+            return self.on_kv_key(key);
+        }
         if self.input.is_some() {
             return self.on_input_key(key);
         }
@@ -320,6 +340,8 @@ impl App {
             (KeyCode::Char('e'), _) => self.start_edit(),
             (KeyCode::Char('a'), _) => self.open_inline_editor(),
             (KeyCode::Char('E'), _) => self.request_edit_env(),
+            (KeyCode::Char('c'), _) => self.copy_context(),
+            (KeyCode::Char('C'), _) => self.copy_env(),
             (KeyCode::Char('d'), _) => self.start_delete(),
             (KeyCode::Char('y'), _) => self.start_duplicate(),
             (KeyCode::Char('i'), _) => self.start_import(),
@@ -421,11 +443,10 @@ impl App {
                     self.status = "Create an environment first.".into();
                     return;
                 }
-                self.input = Some(InputState {
-                    title: "New secret".into(),
-                    prompt: "KEY=VALUE:".into(),
-                    buffer: String::new(),
-                    action: InputAction::NewSecret,
+                self.kv_input = Some(KvInputState {
+                    key: String::new(),
+                    value: String::new(),
+                    active: KvField::Key,
                 });
             }
         }
@@ -466,6 +487,66 @@ impl App {
             cx: 0,
             cy: 0,
         });
+    }
+
+    /// Context-aware copy: the selected secret's value when on the Secrets
+    /// pane, otherwise the whole environment as a `.env` document.
+    fn copy_context(&mut self) {
+        if self.focus == Focus::Secrets && self.current_secret_key().is_some() {
+            self.copy_secret();
+        } else {
+            self.copy_env();
+        }
+    }
+
+    /// Copy the selected secret's resolved value to the clipboard.
+    fn copy_secret(&mut self) {
+        let (Some(project), Some(env), Some(key)) = (
+            self.current_project_name(),
+            self.current_env_name(),
+            self.current_secret_key(),
+        ) else {
+            self.status = "No secret selected.".into();
+            return;
+        };
+        match resolve::resolve_at(&self.handle.store, &project, &env, &key) {
+            Ok(value) => self.copy_text(&value, &format!("value of `{key}`")),
+            Err(e) => self.status = format!("Copy failed: {e}"),
+        }
+    }
+
+    /// Copy the whole current environment as a resolved `.env` document.
+    fn copy_env(&mut self) {
+        let (Some(project), Some(env)) = (self.current_project_name(), self.current_env_name())
+        else {
+            self.status = "Select an environment to copy.".into();
+            return;
+        };
+        let keys: Vec<String> = self
+            .current_env()
+            .map(|e| e.values.keys().cloned().collect())
+            .unwrap_or_default();
+        let mut resolved = indexmap::IndexMap::new();
+        for key in keys {
+            match resolve::resolve_at(&self.handle.store, &project, &env, &key) {
+                Ok(v) => {
+                    resolved.insert(key, v);
+                }
+                Err(e) => {
+                    self.status = format!("Copy failed: {e}");
+                    return;
+                }
+            }
+        }
+        let text = envfile::serialize(&resolved);
+        self.copy_text(&text, &format!("{}/{} as .env", project, env));
+    }
+
+    fn copy_text(&mut self, text: &str, what: &str) {
+        match crate::clip::copy(text) {
+            Ok(method) => self.status = format!("Copied {what} to clipboard ({method})."),
+            Err(e) => self.status = format!("Copy failed: {e}"),
+        }
     }
 
     fn start_edit_secret(&mut self) {
@@ -631,6 +712,60 @@ impl App {
         Ok(())
     }
 
+    fn on_kv_key(&mut self, key: KeyEvent) -> Result<()> {
+        let Some(form) = self.kv_input.as_mut() else {
+            return Ok(());
+        };
+        match key.code {
+            KeyCode::Esc => {
+                self.kv_input = None;
+            }
+            KeyCode::Tab | KeyCode::Up | KeyCode::Down => {
+                form.active = match form.active {
+                    KvField::Key => KvField::Value,
+                    KvField::Value => KvField::Key,
+                };
+            }
+            KeyCode::Enter => {
+                // Enter advances Key → Value, then submits from Value.
+                match form.active {
+                    KvField::Key => form.active = KvField::Value,
+                    KvField::Value => {
+                        let form = self.kv_input.take().unwrap();
+                        self.submit_kv(form);
+                    }
+                }
+            }
+            KeyCode::Backspace => match form.active {
+                KvField::Key => {
+                    form.key.pop();
+                }
+                KvField::Value => {
+                    form.value.pop();
+                }
+            },
+            KeyCode::Char(c) => match form.active {
+                KvField::Key => form.key.push(c),
+                KvField::Value => form.value.push(c),
+            },
+            _ => {}
+        }
+        Ok(())
+    }
+
+    fn submit_kv(&mut self, form: KvInputState) {
+        let key = form.key.trim().to_string();
+        if key.is_empty() {
+            self.status = "Key cannot be empty.".into();
+            return;
+        }
+        if let Some(e) = self.current_env_mut() {
+            e.values.insert(key.clone(), form.value);
+            self.save();
+            self.status = format!("Set `{key}`.");
+        }
+    }
+
     fn submit_input(&mut self, state: InputState) -> Result<()> {
         let value = state.buffer.trim().to_string();
         match state.action {
@@ -664,23 +799,6 @@ impl App {
                             self.status = format!("Created environment `{value}`.");
                         }
                     }
-                }
-            }
-            InputAction::NewSecret => {
-                let Some((key, val)) = value.split_once('=') else {
-                    self.status = "Use KEY=VALUE format.".into();
-                    return Ok(());
-                };
-                let key = key.trim().to_string();
-                let val = val.trim().to_string();
-                if key.is_empty() {
-                    self.status = "Key cannot be empty.".into();
-                    return Ok(());
-                }
-                if let Some(e) = self.current_env_mut() {
-                    e.values.insert(key.clone(), val);
-                    self.save();
-                    self.status = format!("Set `{key}`.");
                 }
             }
             InputAction::EditSecret { key } => {
@@ -1005,6 +1123,9 @@ impl App {
         if let Some(input) = &self.input {
             self.draw_input(f, input);
         }
+        if let Some(form) = &self.kv_input {
+            self.draw_kv(f, form);
+        }
         if let Some(confirm) = &self.confirm {
             self.draw_confirm(f, confirm);
         }
@@ -1192,7 +1313,7 @@ impl App {
 
     fn draw_status(&self, f: &mut Frame, area: Rect) {
         let keys =
-            "n:new e:edit a:edit-env E:$EDITOR d:del y:dup i:import x:export D:default f:folder s:show ?:help q:quit";
+            "n:new e:edit a:edit-env E:$EDITOR c:copy C:copy-env d:del y:dup i:import x:export D:default f:folder s:show ?:help q:quit";
         let line = Line::from(vec![
             Span::styled(
                 format!(" {} ", self.status),
@@ -1226,6 +1347,41 @@ impl App {
                 "Enter: confirm   Esc: cancel",
                 Style::default().fg(Color::DarkGray),
             )),
+        ])
+        .block(block)
+        .wrap(Wrap { trim: false });
+        f.render_widget(inner, area);
+    }
+
+    fn draw_kv(&self, f: &mut Frame, form: &KvInputState) {
+        let area = centered_rect(60, 8, f.area());
+        f.render_widget(Clear, area);
+        let block = Block::default()
+            .borders(Borders::ALL)
+            .border_style(Style::default().fg(Color::Cyan))
+            .title(" New secret ")
+            .title_bottom(" Tab: switch field   Enter: next/confirm   Esc: cancel ");
+
+        let field = |label: &str, value: &str, active: bool| -> Line {
+            let label_style = if active {
+                Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD)
+            } else {
+                Style::default().fg(Color::Gray)
+            };
+            let cursor = if active { "_" } else { "" };
+            Line::from(vec![
+                Span::styled(format!("{label:<7}"), label_style),
+                Span::styled(
+                    format!("{value}{cursor}"),
+                    Style::default().fg(Color::White),
+                ),
+            ])
+        };
+
+        let inner = Paragraph::new(vec![
+            field("Key:", &form.key, form.active == KvField::Key),
+            Line::from(""),
+            field("Value:", &form.value, form.active == KvField::Value),
         ])
         .block(block)
         .wrap(Wrap { trim: false });
@@ -1266,10 +1422,12 @@ impl App {
             Line::from("  ←/h         go back   Tab: cycle panes"),
             Line::from(""),
             Line::from("Actions (context = focused pane)"),
-            Line::from("  n  new project / env / secret"),
+            Line::from("  n  new project / env / secret (secret uses Key + Value fields)"),
             Line::from("  e  edit secret (on Secrets) / whole env inline (otherwise)"),
             Line::from("  a  edit the whole environment inline (multi-line .env editor)"),
             Line::from("  E  edit the whole environment in $EDITOR (as a .env)"),
+            Line::from("  c  copy: secret value (on Secrets) / whole env (otherwise)"),
+            Line::from("  C  copy the whole environment as a .env document"),
             Line::from("  d  delete focused item (asks to confirm)"),
             Line::from("  y  duplicate environment"),
             Line::from("  i  import a .env file into the selected env"),

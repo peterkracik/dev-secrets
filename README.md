@@ -214,6 +214,8 @@ Environments → Secrets** — and navigate left-to-right as you drill in.
 | `e`             | Edit secret (on Secrets) / whole env inline (else)  |
 | `a`             | Edit the whole environment inline (multi-line)      |
 | `E`             | Edit the whole environment in `$EDITOR` (as `.env`) |
+| `c`             | Copy: secret value (on Secrets) / whole env (else)  |
+| `C`             | Copy the whole environment as a `.env` document     |
 | `d`             | Delete the focused item (asks for confirmation)     |
 | `y`             | Duplicate the selected environment                  |
 | `i`             | Import a `.env` file into the selected environment  |
@@ -224,8 +226,17 @@ Environments → Secrets** — and navigate left-to-right as you drill in.
 | `?`             | Help overlay                                        |
 | `q` / `Ctrl-C`  | Quit                                                |
 
-New secrets are entered as `KEY=VALUE`. Values are masked by default — press
-`s` to reveal them.
+New secrets are entered through a two-field form (**Key** and **Value** as
+separate boxes, `Tab` to switch) so a value can be pasted on its own. Values
+are masked by default — press `s` to reveal them.
+
+### Copy to clipboard
+
+Press `c` to copy the selected secret's resolved value, or `C` (also `c` when
+not on a single secret) to copy the whole environment as a resolved `.env`
+document. dev-secrets uses the system clipboard tool when available
+(`pbcopy`, `wl-copy`, `xclip`/`xsel`, `clip`) and otherwise falls back to the
+terminal's OSC 52 sequence, which also works over SSH and tmux.
 
 ### Editing a whole environment at once
 

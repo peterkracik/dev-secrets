@@ -2,6 +2,7 @@
 //! secrets, organized by project and environment.
 
 mod cli;
+mod clip;
 mod commands;
 mod config;
 mod envfile;
