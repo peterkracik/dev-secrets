@@ -1,6 +1,7 @@
 //! Implementations of the non-interactive CLI subcommands.
 
 use std::fs;
+use std::io::{IsTerminal, Write};
 use std::path::{Path, PathBuf};
 
 use anyhow::{bail, Context, Result};
@@ -46,12 +47,142 @@ fn setup(folder: Option<PathBuf>) -> Result<()> {
     config::save(&cfg)?;
 
     // Make sure the store file exists so subsequent runs are clean.
-    let handle = StoreHandle::open_at(store_path.clone())?;
+    let mut handle = StoreHandle::open_at(store_path.clone())?;
     handle.save()?;
 
     println!("dev-secrets initialised.");
     println!("Store location: {}", store_path.display());
+
+    // Without an interactive terminal we cannot run the wizard.
+    if !std::io::stdin().is_terminal() {
+        println!("(non-interactive input — skipping project/environment setup)");
+        return Ok(());
+    }
+
+    // Step 1: choose or create a project.
+    let project = wizard_project(&mut handle)?;
+    // Step 2: choose or create an environment within it.
+    let env = wizard_env(&mut handle, &project)?;
+    handle.save()?;
+
+    // Offer to link the current folder so `devsecrets export` works from here.
+    if let Ok(dir) = std::env::current_dir() {
+        let dir = dir.to_string_lossy().into_owned();
+        let already = handle
+            .store
+            .project(&project)
+            .and_then(|p| p.folder.clone())
+            .as_deref()
+            == Some(dir.as_str());
+        if !already {
+            let answer = prompt(&format!("Link this folder to `{project}`?\n  {dir}\n[y/N]: "))?;
+            if answer.eq_ignore_ascii_case("y") {
+                if let Some(p) = handle.store.project_mut(&project) {
+                    p.folder = Some(dir);
+                }
+                handle.save()?;
+                println!("Linked.");
+            }
+        }
+    }
+
+    println!("\nSetup complete — project `{project}`, environment `{env}`.");
+    println!("Add secrets with: devsecrets secret set -p {project} -e {env} KEY value");
+    println!("Or browse interactively with: devsecrets");
     Ok(())
+}
+
+/// Read a trimmed line of input after printing `msg`.
+fn prompt(msg: &str) -> Result<String> {
+    print!("{msg}");
+    std::io::stdout().flush()?;
+    let mut line = String::new();
+    std::io::stdin().read_line(&mut line)?;
+    Ok(line.trim().to_string())
+}
+
+/// Wizard step 1: select an existing project by number or create a new one
+/// by typing its name. Returns the chosen project's name.
+fn wizard_project(handle: &mut StoreHandle) -> Result<String> {
+    println!("\nStep 1/2 — Project");
+    let names: Vec<String> = handle.store.projects.keys().cloned().collect();
+    if names.is_empty() {
+        println!("  (no projects yet)");
+    } else {
+        for (i, n) in names.iter().enumerate() {
+            println!("  {}) {}", i + 1, n);
+        }
+    }
+    loop {
+        let input = prompt("Select a number, or type a new project name: ")?;
+        if input.is_empty() {
+            continue;
+        }
+        if let Some(name) = pick_by_number(&input, &names) {
+            return Ok(name);
+        }
+        if handle.store.projects.contains_key(&input) {
+            println!("Project `{input}` already exists — selecting it.");
+            return Ok(input);
+        }
+        handle
+            .store
+            .projects
+            .insert(input.clone(), Project::default());
+        println!("Created project `{input}`.");
+        return Ok(input);
+    }
+}
+
+/// Wizard step 2: select or create an environment within `project`.
+fn wizard_env(handle: &mut StoreHandle, project: &str) -> Result<String> {
+    println!("\nStep 2/2 — Environment in `{project}`");
+    let names: Vec<String> = handle
+        .store
+        .project(project)
+        .map(|p| p.environments.keys().cloned().collect())
+        .unwrap_or_default();
+    if names.is_empty() {
+        println!("  (no environments yet)");
+    } else {
+        for (i, n) in names.iter().enumerate() {
+            println!("  {}) {}", i + 1, n);
+        }
+    }
+    loop {
+        let input = prompt("Select a number, or type a new environment name: ")?;
+        if input.is_empty() {
+            continue;
+        }
+        if let Some(name) = pick_by_number(&input, &names) {
+            return Ok(name);
+        }
+        let proj = handle
+            .store
+            .project_mut(project)
+            .context("project disappeared")?;
+        if proj.environments.contains_key(&input) {
+            println!("Environment `{input}` already exists — selecting it.");
+            return Ok(input);
+        }
+        proj.environments
+            .insert(input.clone(), Environment::default());
+        if proj.default_env.is_none() {
+            proj.default_env = Some(input.clone());
+        }
+        println!("Created environment `{input}`.");
+        return Ok(input);
+    }
+}
+
+/// If `input` is a valid 1-based index into `names`, return that name.
+fn pick_by_number(input: &str, names: &[String]) -> Option<String> {
+    let idx: usize = input.parse().ok()?;
+    if idx >= 1 && idx <= names.len() {
+        Some(names[idx - 1].clone())
+    } else {
+        None
+    }
 }
 
 fn project(action: ProjectAction) -> Result<()> {

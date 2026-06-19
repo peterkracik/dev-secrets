@@ -154,7 +154,7 @@ On Linux/macOS you can override the base directory with the standard
 
 ### `devsecrets setup`
 
-Run `setup` once to initialize the app and, optionally, to keep the store
+Run `setup` to initialize the app and, optionally, to keep the store
 somewhere other than the default:
 
 ```sh
@@ -165,6 +165,16 @@ devsecrets setup ~/secrets/store.json # or point at an exact file path
 
 - Pass a **directory** → the store is created as `store.json` inside it.
 - Pass a **`.json` file path** → that exact file is used.
+
+When run in a terminal, `setup` then walks you through a short wizard:
+
+1. **Project** — pick an existing project by number, or type a name to create
+   a new one.
+2. **Environment** — pick or create an environment within that project.
+
+Finally it offers to link the current folder to the project (so a bare
+`devsecrets export` works from there). The wizard is skipped automatically
+when input isn't an interactive terminal, so `setup` stays scriptable.
 
 Putting the store in a synced folder (Dropbox, iCloud, a private Git repo,
 etc.) is an easy way to share dev values across your own machines. (Remember:
@@ -201,7 +211,8 @@ Environments → Secrets** — and navigate left-to-right as you drill in.
 | `←`/`h`         | Go back                                             |
 | `Tab`           | Cycle focus between panes                           |
 | `n`             | New project / env / secret (based on focused pane)  |
-| `e` / `Enter`   | Edit the selected secret's value                    |
+| `e`             | Edit secret (on Secrets) / whole env inline (else)  |
+| `a`             | Edit the whole environment inline (multi-line)      |
 | `E`             | Edit the whole environment in `$EDITOR` (as `.env`) |
 | `d`             | Delete the focused item (asks for confirmation)     |
 | `y`             | Duplicate the selected environment                  |
@@ -216,14 +227,20 @@ Environments → Secrets** — and navigate left-to-right as you drill in.
 New secrets are entered as `KEY=VALUE`. Values are masked by default — press
 `s` to reveal them.
 
-### Bulk-editing an environment in your editor
+### Editing a whole environment at once
 
-Press `E` with an environment selected to open **the entire environment** in
-your editor (`$VISUAL`, then `$EDITOR`, falling back to `vi` / `notepad`) as a
-normal `.env` document. Add, change, reorder, or remove lines freely; when you
-save and quit, the file is parsed back and replaces the environment's
-contents. Quit without saving to cancel — nothing changes. References like
-`${project.env.KEY}` are preserved verbatim and resolved on export as usual.
+You can edit the entire environment as one `.env` document — two ways:
+
+- **Inline (`a`, or `e` when not on a single secret):** a built-in multi-line
+  editor opens inside the TUI. Type freely; `Ctrl-S` saves and applies,
+  `Esc` cancels. No external tools required.
+- **External (`E`):** opens the environment in your editor (`$VISUAL`, then
+  `$EDITOR`, falling back to `vi` / `notepad`). Save and quit to apply; quit
+  without saving to cancel.
+
+Either way, add/change/reorder/remove lines freely; on save the document is
+parsed back and replaces the environment's contents. References like
+`${project.env.KEY}` are preserved verbatim and resolved on export.
 
 ---
 
@@ -353,6 +370,12 @@ Yes. Keep it valid JSON; key order is preserved on save so diffs stay clean.
 **Does it support comments / `export FOO=bar` in `.env` files?**
 On import, yes — blank lines, `#` comments, an optional `export ` prefix, and
 single/double quoted values are all understood.
+
+**Can a value be a JSON object, contain `=`, spaces, or newlines?**
+Yes. Values are arbitrary strings and are stored verbatim. On `.env`
+export/editing they are double-quoted and escaped only when needed (e.g. a
+`{"a": 1}` JSON value, a multi-line cert, or a Windows path), so the
+round-trip is lossless.
 
 **What happens if I run a command before `setup`?**
 dev-secrets initializes the default location automatically, so `setup` is

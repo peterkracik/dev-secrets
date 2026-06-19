@@ -6,7 +6,7 @@
 
 use anyhow::Result;
 use ratatui::crossterm::event::{self, Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
-use ratatui::layout::{Constraint, Direction, Layout, Rect};
+use ratatui::layout::{Constraint, Direction, Layout, Margin, Rect};
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Clear, List, ListItem, ListState, Paragraph, Wrap};
@@ -63,6 +63,100 @@ struct ConfirmState {
     action: ConfirmAction,
 }
 
+/// A minimal in-app multi-line editor for a whole environment, shown as a
+/// `.env` document. Lines are edited directly; on save the text is parsed
+/// back and replaces the environment's contents.
+struct EnvEditor {
+    project: String,
+    env: String,
+    lines: Vec<String>,
+    /// Cursor column, as a character index within the current line.
+    cx: usize,
+    /// Cursor row.
+    cy: usize,
+}
+
+impl EnvEditor {
+    fn cur_len(&self) -> usize {
+        self.lines[self.cy].chars().count()
+    }
+
+    fn insert_char(&mut self, c: char) {
+        let line = &mut self.lines[self.cy];
+        let byte = char_byte_idx(line, self.cx);
+        line.insert(byte, c);
+        self.cx += 1;
+    }
+
+    fn insert_newline(&mut self) {
+        let line = &mut self.lines[self.cy];
+        let byte = char_byte_idx(line, self.cx);
+        let rest = line.split_off(byte);
+        self.lines.insert(self.cy + 1, rest);
+        self.cy += 1;
+        self.cx = 0;
+    }
+
+    fn backspace(&mut self) {
+        if self.cx > 0 {
+            let line = &mut self.lines[self.cy];
+            let start = char_byte_idx(line, self.cx - 1);
+            let end = char_byte_idx(line, self.cx);
+            line.replace_range(start..end, "");
+            self.cx -= 1;
+        } else if self.cy > 0 {
+            let cur = self.lines.remove(self.cy);
+            self.cy -= 1;
+            self.cx = self.cur_len();
+            self.lines[self.cy].push_str(&cur);
+        }
+    }
+
+    fn delete_forward(&mut self) {
+        if self.cx < self.cur_len() {
+            let line = &mut self.lines[self.cy];
+            let start = char_byte_idx(line, self.cx);
+            let end = char_byte_idx(line, self.cx + 1);
+            line.replace_range(start..end, "");
+        } else if self.cy + 1 < self.lines.len() {
+            let next = self.lines.remove(self.cy + 1);
+            self.lines[self.cy].push_str(&next);
+        }
+    }
+
+    fn move_left(&mut self) {
+        if self.cx > 0 {
+            self.cx -= 1;
+        } else if self.cy > 0 {
+            self.cy -= 1;
+            self.cx = self.cur_len();
+        }
+    }
+
+    fn move_right(&mut self) {
+        if self.cx < self.cur_len() {
+            self.cx += 1;
+        } else if self.cy + 1 < self.lines.len() {
+            self.cy += 1;
+            self.cx = 0;
+        }
+    }
+
+    fn move_up(&mut self) {
+        if self.cy > 0 {
+            self.cy -= 1;
+            self.cx = self.cx.min(self.cur_len());
+        }
+    }
+
+    fn move_down(&mut self) {
+        if self.cy + 1 < self.lines.len() {
+            self.cy += 1;
+            self.cx = self.cx.min(self.cur_len());
+        }
+    }
+}
+
 pub struct App {
     handle: StoreHandle,
     focus: Focus,
@@ -74,6 +168,8 @@ pub struct App {
     status: String,
     input: Option<InputState>,
     confirm: Option<ConfirmState>,
+    /// Active in-app full-environment editor, if any.
+    editor: Option<EnvEditor>,
     /// Set when the user asks to edit the current environment in `$EDITOR`.
     /// Handled in the main loop (where the terminal can be suspended).
     pending_editor: bool,
@@ -103,6 +199,7 @@ impl App {
             status: "Welcome to dev-secrets. Press ? for help.".to_string(),
             input: None,
             confirm: None,
+            editor: None,
             pending_editor: false,
             should_quit: false,
         }
@@ -190,6 +287,9 @@ impl App {
     // --- key handling ------------------------------------------------------
 
     fn on_key(&mut self, key: KeyEvent) -> Result<()> {
+        if self.editor.is_some() {
+            return self.on_editor_key(key);
+        }
         if self.input.is_some() {
             return self.on_input_key(key);
         }
@@ -217,7 +317,8 @@ impl App {
             (KeyCode::Left, _) | (KeyCode::Char('h'), _) => self.focus_shallower(),
             (KeyCode::Enter, _) => self.on_enter(),
             (KeyCode::Char('n'), _) => self.start_new(),
-            (KeyCode::Char('e'), _) => self.start_edit_secret(),
+            (KeyCode::Char('e'), _) => self.start_edit(),
+            (KeyCode::Char('a'), _) => self.open_inline_editor(),
             (KeyCode::Char('E'), _) => self.request_edit_env(),
             (KeyCode::Char('d'), _) => self.start_delete(),
             (KeyCode::Char('y'), _) => self.start_duplicate(),
@@ -328,6 +429,43 @@ impl App {
                 });
             }
         }
+    }
+
+    /// Context-aware edit: a single secret when focused on the Secrets pane,
+    /// otherwise the whole environment in the inline editor.
+    fn start_edit(&mut self) {
+        if self.focus == Focus::Secrets && self.current_secret_key().is_some() {
+            self.start_edit_secret();
+        } else {
+            self.open_inline_editor();
+        }
+    }
+
+    /// Open the in-app full-environment editor for the current environment.
+    fn open_inline_editor(&mut self) {
+        let (Some(project), Some(env)) = (self.current_project_name(), self.current_env_name())
+        else {
+            self.status = "Select an environment to edit.".into();
+            return;
+        };
+        let values = self
+            .current_env()
+            .map(|e| e.values.clone())
+            .unwrap_or_default();
+        let mut lines: Vec<String> = envfile::serialize(&values)
+            .lines()
+            .map(|l| l.to_string())
+            .collect();
+        if lines.is_empty() {
+            lines.push(String::new());
+        }
+        self.editor = Some(EnvEditor {
+            project,
+            env,
+            lines,
+            cx: 0,
+            cy: 0,
+        });
     }
 
     fn start_edit_secret(&mut self) {
@@ -743,6 +881,64 @@ impl App {
         Ok(())
     }
 
+    // --- inline editor -----------------------------------------------------
+
+    fn on_editor_key(&mut self, key: KeyEvent) -> Result<()> {
+        // Ctrl-S saves, Esc / Ctrl-C cancels.
+        match (key.code, key.modifiers) {
+            (KeyCode::Char('s'), KeyModifiers::CONTROL) => {
+                if let Some(ed) = self.editor.take() {
+                    self.apply_editor(ed);
+                }
+                return Ok(());
+            }
+            (KeyCode::Esc, _) | (KeyCode::Char('c'), KeyModifiers::CONTROL) => {
+                self.editor = None;
+                self.status = "Edit cancelled — no changes made.".into();
+                return Ok(());
+            }
+            _ => {}
+        }
+
+        let Some(ed) = self.editor.as_mut() else {
+            return Ok(());
+        };
+        match key.code {
+            KeyCode::Enter => ed.insert_newline(),
+            KeyCode::Backspace => ed.backspace(),
+            KeyCode::Delete => ed.delete_forward(),
+            KeyCode::Left => ed.move_left(),
+            KeyCode::Right => ed.move_right(),
+            KeyCode::Up => ed.move_up(),
+            KeyCode::Down => ed.move_down(),
+            KeyCode::Home => ed.cx = 0,
+            KeyCode::End => ed.cx = ed.cur_len(),
+            KeyCode::Tab => {
+                ed.insert_char(' ');
+                ed.insert_char(' ');
+            }
+            KeyCode::Char(c) if !key.modifiers.contains(KeyModifiers::CONTROL) => {
+                ed.insert_char(c)
+            }
+            _ => {}
+        }
+        Ok(())
+    }
+
+    fn apply_editor(&mut self, ed: EnvEditor) {
+        let text = ed.lines.join("\n");
+        let parsed = envfile::parse(&text);
+        let count = parsed.len();
+        if let Some(p) = self.handle.store.project_mut(&ed.project) {
+            if let Some(e) = p.environments.get_mut(&ed.env) {
+                e.values = parsed;
+            }
+        }
+        self.save();
+        self.clamp_indices();
+        self.status = format!("Updated `{}/{}` ({count} secrets).", ed.project, ed.env);
+    }
+
     // --- confirm modal -----------------------------------------------------
 
     fn on_confirm_key(&mut self, key: KeyEvent) -> Result<()> {
@@ -812,6 +1008,48 @@ impl App {
         if let Some(confirm) = &self.confirm {
             self.draw_confirm(f, confirm);
         }
+        if let Some(editor) = &self.editor {
+            self.draw_editor(f, editor);
+        }
+    }
+
+    fn draw_editor(&self, f: &mut Frame, ed: &EnvEditor) {
+        let area = f.area().inner(Margin {
+            horizontal: 4,
+            vertical: 2,
+        });
+        f.render_widget(Clear, area);
+        let block = Block::default()
+            .borders(Borders::ALL)
+            .border_style(Style::default().fg(Color::Cyan))
+            .title(format!(" Edit {}/{} (.env) ", ed.project, ed.env))
+            .title_bottom(" Ctrl-S: save & apply   Esc: cancel ");
+        let inner = block.inner(area);
+        f.render_widget(block, area);
+
+        let height = inner.height as usize;
+        let width = inner.width.max(1) as usize;
+        // Scroll so the cursor stays visible.
+        let vscroll = ed.cy.saturating_sub(height.saturating_sub(1));
+        let hscroll = ed.cx.saturating_sub(width.saturating_sub(1));
+
+        let mut rendered: Vec<Line> = Vec::new();
+        let last = (vscroll + height).min(ed.lines.len());
+        for line in &ed.lines[vscroll..last] {
+            let slice: String = line.chars().skip(hscroll).take(width).collect();
+            // Comment lines are dimmed for readability.
+            let style = if slice.trim_start().starts_with('#') {
+                Style::default().fg(Color::DarkGray)
+            } else {
+                Style::default()
+            };
+            rendered.push(Line::from(Span::styled(slice, style)));
+        }
+        f.render_widget(Paragraph::new(rendered), inner);
+
+        let cursor_x = inner.x + (ed.cx - hscroll) as u16;
+        let cursor_y = inner.y + (ed.cy - vscroll) as u16;
+        f.set_cursor_position((cursor_x, cursor_y));
     }
 
     fn draw_title(&self, f: &mut Frame, area: Rect) {
@@ -954,7 +1192,7 @@ impl App {
 
     fn draw_status(&self, f: &mut Frame, area: Rect) {
         let keys =
-            "n:new e:edit E:editor d:del y:dup i:import x:export D:default f:folder s:show ?:help q:quit";
+            "n:new e:edit a:edit-env E:$EDITOR d:del y:dup i:import x:export D:default f:folder s:show ?:help q:quit";
         let line = Line::from(vec![
             Span::styled(
                 format!(" {} ", self.status),
@@ -1029,7 +1267,8 @@ impl App {
             Line::from(""),
             Line::from("Actions (context = focused pane)"),
             Line::from("  n  new project / env / secret"),
-            Line::from("  e  edit secret value   Enter on a secret also edits"),
+            Line::from("  e  edit secret (on Secrets) / whole env inline (otherwise)"),
+            Line::from("  a  edit the whole environment inline (multi-line .env editor)"),
             Line::from("  E  edit the whole environment in $EDITOR (as a .env)"),
             Line::from("  d  delete focused item (asks to confirm)"),
             Line::from("  y  duplicate environment"),
@@ -1068,6 +1307,11 @@ fn editor_template(project: &str, env: &str, values: &indexmap::IndexMap<String,
     out.push_str("# Save and quit to apply, or quit without saving to cancel.\n\n");
     out.push_str(&envfile::serialize(values));
     out
+}
+
+/// Byte offset of the `n`-th character in `s` (or `s.len()` if past the end).
+fn char_byte_idx(s: &str, n: usize) -> usize {
+    s.char_indices().nth(n).map(|(b, _)| b).unwrap_or(s.len())
 }
 
 /// Replace characters that are awkward in a temp file name.
