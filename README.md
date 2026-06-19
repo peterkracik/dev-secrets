@@ -259,12 +259,13 @@ environments. Opening an environment drills into its **Secrets** screen.
 | `e`             | Edit a secret, or the selected env inline             |
 | `a`             | Edit the whole environment inline (multi-line)        |
 | `E`             | Edit the whole environment in `$EDITOR` (as `.env`)   |
+| `g`             | Jump to the secret a `$ref:` value points at          |
 | `c`             | Copy: secret value (on Secrets) / whole env (else)    |
 | `C`             | Copy the whole environment as a `.env` document       |
 | `d`             | Delete the selected project / env / secret (confirm)  |
 | `y`             | Duplicate the selected environment                    |
 | `i`             | Import a `.env` file into the selected environment    |
-| `x`             | Export the selected environment to a `.env` file      |
+| `x`             | Export the selected env (then pick a format)          |
 | `D`             | Set the selected environment as the project default   |
 | `f`             | Assign the current folder to this project/env         |
 | `s`             | Toggle showing / hiding secret values                 |
@@ -346,7 +347,7 @@ devsecrets env delete -p <project> <name>
 ### Secrets
 
 ```sh
-devsecrets secret set    -p <project> -e <env> <KEY> <VALUE>
+devsecrets secret set    -p <project> -e <env> <KEY> <VALUE> [--type text|number|json]
 devsecrets secret get    -p <project> -e <env> <KEY> [--raw]
 devsecrets secret list   -p <project> -e <env> [--mask]
 devsecrets secret delete -p <project> -e <env> <KEY>
@@ -354,6 +355,11 @@ devsecrets secret delete -p <project> -e <env> <KEY>
 
 `get` resolves references by default (use `--raw` for the literal value).
 `list` shows values by default; pass `--mask` to obscure them.
+
+**Value types.** Each secret has a type — `text` (default), `number`, or
+`json` — which is validated on set. `--type number` rejects non-numbers and
+`--type json` rejects invalid JSON. In the TUI, the new-secret form has a Type
+field (`←/→` to change).
 
 ### Import & export
 
@@ -445,9 +451,11 @@ secrets. Use `↑`/`↓`/`Tab` to choose and `Enter` to insert the right form
 (`${SECRET}` / `${env.SECRET}` / `${project.env.SECRET}` depending on where it
 lives); `Esc` dismisses the popup.
 
-**Display:** references aren't secret, so the TUI shows them in clear as
-`ref:project.env.key` (e.g. `AUTH = ref:shared.TOKEN`) instead of masking
-them, while ordinary values stay masked until you press `s`.
+**Display & jump:** references aren't secret, so the TUI shows them in clear
+as `$ref:project.env.key` (e.g. `AUTH = $ref:shared.TOKEN`, with a coloured
+`$ref:` prefix) instead of masking them, while ordinary values stay masked
+until you press `s`. Press `g` on a referencing secret to jump straight to the
+secret it points at.
 
 ---
 

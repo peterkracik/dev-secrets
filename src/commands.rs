@@ -272,11 +272,26 @@ fn secret(action: SecretAction) -> Result<()> {
             env,
             key,
             value,
+            kind,
         } => {
+            // Default to the existing type when not given (else text).
+            let kind = kind.unwrap_or_else(|| {
+                handle
+                    .store
+                    .projects
+                    .get(&project)
+                    .and_then(|p| p.environments.get(&env))
+                    .map(|e| e.kind(&key))
+                    .unwrap_or_default()
+            });
+            if let Err(msg) = kind.validate(&value) {
+                bail!("{msg}");
+            }
             let e = env_mut(&mut handle, &project, &env)?;
             e.values.insert(key.clone(), value);
+            e.set_kind(&key, kind);
             handle.save()?;
-            println!("Set `{key}` in `{project}/{env}`.");
+            println!("Set `{key}` in `{project}/{env}` ({}).", kind.label());
         }
         SecretAction::Get {
             project,
@@ -316,6 +331,7 @@ fn secret(action: SecretAction) -> Result<()> {
             if e.values.shift_remove(&key).is_none() {
                 bail!("secret `{key}` not found in `{project}/{env}`");
             }
+            e.types.shift_remove(&key);
             handle.save()?;
             println!("Deleted `{key}` from `{project}/{env}`.");
         }
@@ -535,7 +551,7 @@ fn export(
 }
 
 /// Guess an output format from a file extension.
-fn format_from_path(path: &Path) -> Option<Format> {
+pub fn format_from_path(path: &Path) -> Option<Format> {
     match path.extension().and_then(|e| e.to_str()) {
         Some("json") => Some(Format::Json),
         Some("toml") => Some(Format::Toml),
@@ -546,7 +562,7 @@ fn format_from_path(path: &Path) -> Option<Format> {
 }
 
 /// Render resolved key/value pairs in the requested format.
-fn render(values: &indexmap::IndexMap<String, String>, fmt: Format) -> Result<String> {
+pub fn render(values: &indexmap::IndexMap<String, String>, fmt: Format) -> Result<String> {
     Ok(match fmt {
         Format::Env => envfile::serialize(values),
         Format::Shell => values
@@ -633,10 +649,15 @@ fn env_ref<'a>(handle: &'a StoreHandle, project: &str, env: &str) -> Result<&'a 
 }
 
 fn mask(value: &str) -> String {
-    if value.len() <= 4 {
-        "•".repeat(value.chars().count().max(1))
-    } else {
-        let visible: String = value.chars().take(2).collect();
-        format!("{visible}{}", "•".repeat(6))
+    let len = value.chars().count();
+    if len <= 4 {
+        return "•".repeat(len.max(1));
     }
+    // Only hint with leading alphanumerics so structured values don't leak.
+    let visible: String = value
+        .chars()
+        .take(2)
+        .take_while(|c| c.is_alphanumeric())
+        .collect();
+    format!("{visible}{}", "•".repeat(6))
 }

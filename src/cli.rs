@@ -8,6 +8,8 @@ use std::path::PathBuf;
 
 use clap::{Parser, Subcommand, ValueEnum};
 
+use crate::model::Kind;
+
 /// Output format for `export`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, ValueEnum)]
 pub enum Format {
@@ -160,6 +162,9 @@ pub enum SecretAction {
         env: String,
         key: String,
         value: String,
+        /// Declared value type (validated): text, number, or json.
+        #[arg(short = 't', long = "type", value_enum)]
+        kind: Option<Kind>,
     },
     /// Get a single secret (resolved unless --raw).
     Get {

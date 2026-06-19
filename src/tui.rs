@@ -17,16 +17,17 @@ use ratatui::widgets::{
 };
 use ratatui::{Frame, Terminal};
 
+use crate::cli::Format;
 use crate::fuzzy;
 use crate::meta::{self, Meta};
-use crate::model::{Environment, Project};
+use crate::model::{Environment, Kind, Project};
 use crate::store::StoreHandle;
 use crate::{envfile, resolve};
 
 /// Accent colour used throughout the UI.
 const ACCENT: Color = Color::Cyan;
 /// Maximum size of the floating window; it never fills the whole terminal.
-const MAX_WIDTH: u16 = 110;
+const MAX_WIDTH: u16 = 143;
 const MAX_HEIGHT: u16 = 34;
 
 /// Which screen currently has keyboard focus. Projects and environments share
@@ -61,18 +62,37 @@ struct InputState {
     action: InputAction,
 }
 
-/// Which field of the two-field new-secret form is active.
+/// Which field of the new-secret form is active.
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum KvField {
     Key,
     Value,
+    Type,
 }
 
-/// Two-field form for adding a secret — separate Key and Value boxes so a
-/// value can be pasted on its own without a `KEY=` prefix.
+impl KvField {
+    fn next(self) -> KvField {
+        match self {
+            KvField::Key => KvField::Value,
+            KvField::Value => KvField::Type,
+            KvField::Type => KvField::Key,
+        }
+    }
+    fn prev(self) -> KvField {
+        match self {
+            KvField::Key => KvField::Type,
+            KvField::Value => KvField::Key,
+            KvField::Type => KvField::Value,
+        }
+    }
+}
+
+/// Form for adding a secret — separate Key, Value, and Type fields so a value
+/// can be pasted on its own and its type chosen.
 struct KvInputState {
     key: String,
     value: String,
+    kind: Kind,
     active: KvField,
 }
 
@@ -244,6 +264,8 @@ pub struct App {
     import_choice: Option<String>,
     /// Active per-key import confirmation session, if any.
     import_session: Option<ImportSession>,
+    /// Output path awaiting an export-format choice, if any.
+    export_choice: Option<String>,
     /// Active in-app full-environment editor, if any.
     editor: Option<EnvEditor>,
     /// Set when the user asks to edit the current environment in `$EDITOR`.
@@ -287,6 +309,7 @@ impl App {
             confirm: None,
             import_choice: None,
             import_session: None,
+            export_choice: None,
             editor: None,
             pending_editor: false,
             should_quit: false,
@@ -439,6 +462,9 @@ impl App {
         if self.import_session.is_some() {
             return self.on_import_session_key(key);
         }
+        if self.export_choice.is_some() {
+            return self.on_export_choice_key(key);
+        }
         if self.show_help {
             self.show_help = false;
             return Ok(());
@@ -510,6 +536,7 @@ impl App {
             (KeyCode::Char('x'), _) => self.start_export(),
             (KeyCode::Char('D'), _) => self.set_default_env(),
             (KeyCode::Char('f'), _) => self.assign_folder(),
+            (KeyCode::Char('g'), _) => self.goto_reference(),
             _ => {}
         }
         Ok(())
@@ -764,6 +791,7 @@ impl App {
                 self.kv_input = Some(KvInputState {
                     key: String::new(),
                     value: String::new(),
+                    kind: Kind::Text,
                     active: KvField::Key,
                 });
             }
@@ -929,6 +957,65 @@ impl App {
             buffer: current,
             action: InputAction::EditSecret { key },
         });
+    }
+
+    /// Jump to the secret that the current secret's first `${…}` reference
+    /// points at.
+    fn goto_reference(&mut self) {
+        if self.focus != Focus::Secrets {
+            return;
+        }
+        let (Some(project), Some(env), Some(key)) = (
+            self.current_project_name(),
+            self.current_env_name(),
+            self.current_secret_key(),
+        ) else {
+            return;
+        };
+        let raw = self
+            .handle
+            .store
+            .value(&project, &env, &key)
+            .cloned()
+            .unwrap_or_default();
+        let Some(inner) = first_reference(&raw) else {
+            self.status = "This secret isn't a reference.".into();
+            return;
+        };
+        // Resolve the reference relative to the current project/env.
+        let parts: Vec<&str> = inner.split('.').collect();
+        let (tp, te, tk) = match parts.as_slice() {
+            [k] => (project.clone(), env.clone(), (*k).to_string()),
+            [e, k] => (project.clone(), (*e).to_string(), (*k).to_string()),
+            [p, e, k] => ((*p).to_string(), (*e).to_string(), (*k).to_string()),
+            _ => {
+                self.status = format!("invalid reference ${{{inner}}}");
+                return;
+            }
+        };
+        let target = self
+            .handle
+            .store
+            .projects
+            .get_index_of(tp.as_str())
+            .and_then(|pi| {
+                let (_, p) = self.handle.store.projects.get_index(pi)?;
+                let ei = p.environments.get_index_of(te.as_str())?;
+                let (_, e) = p.environments.get_index(ei)?;
+                let si = e.values.get_index_of(tk.as_str())?;
+                Some((pi, ei, si))
+            });
+        match target {
+            Some((pi, ei, si)) => {
+                self.proj_idx = pi;
+                self.env_idx = ei;
+                self.secret_idx = si;
+                self.focus = Focus::Secrets;
+                self.reset_query();
+                self.status = format!("→ {tp}/{te}/{tk}");
+            }
+            None => self.status = format!("reference target `{tp}.{te}.{tk}` not found"),
+        }
     }
 
     /// Open the selected environment in `$EDITOR`. The actual launch happens
@@ -1141,17 +1228,18 @@ impl App {
             KeyCode::Esc => {
                 self.kv_input = None;
             }
-            KeyCode::Tab | KeyCode::Up | KeyCode::Down => {
-                form.active = match form.active {
-                    KvField::Key => KvField::Value,
-                    KvField::Value => KvField::Key,
-                };
+            KeyCode::Tab | KeyCode::Down => form.active = form.active.next(),
+            KeyCode::Up => form.active = form.active.prev(),
+            // On the Type field, ←/→ cycle the kind.
+            KeyCode::Left | KeyCode::Right if form.active == KvField::Type => {
+                form.kind = form.kind.next();
             }
             KeyCode::Enter => {
-                // Enter advances Key → Value, then submits from Value.
+                // Enter advances Key → Value → Type, then submits.
                 match form.active {
                     KvField::Key => form.active = KvField::Value,
-                    KvField::Value => {
+                    KvField::Value => form.active = KvField::Type,
+                    KvField::Type => {
                         let form = self.kv_input.take().unwrap();
                         self.submit_kv(form);
                     }
@@ -1161,6 +1249,7 @@ impl App {
                 match form.active {
                     KvField::Key => form.key.pop(),
                     KvField::Value => form.value.pop(),
+                    KvField::Type => None,
                 };
                 self.ac_reset();
             }
@@ -1168,6 +1257,7 @@ impl App {
                 match form.active {
                     KvField::Key => form.key.push(c),
                     KvField::Value => form.value.push(c),
+                    KvField::Type => {}
                 };
                 self.ac_reset();
             }
@@ -1276,12 +1366,20 @@ impl App {
         let key = form.key.trim().to_string();
         if key.is_empty() {
             self.status = "Key cannot be empty.".into();
+            self.kv_input = Some(form);
             return;
         }
+        if let Err(msg) = form.kind.validate(&form.value) {
+            self.status = msg;
+            self.kv_input = Some(form);
+            return;
+        }
+        let label = form.kind.label();
         if let Some(e) = self.current_env_mut() {
             e.values.insert(key.clone(), form.value);
+            e.set_kind(&key, form.kind);
             self.save();
-            self.status = format!("Set `{key}`.");
+            self.status = format!("Set `{key}` ({label}).");
         }
     }
 
@@ -1321,7 +1419,17 @@ impl App {
                 }
             }
             InputAction::EditSecret { key } => {
-                if let Some(e) = self.current_env_mut() {
+                let kind = self.current_env().map(|e| e.kind(&key)).unwrap_or_default();
+                if let Err(msg) = kind.validate(&state.buffer) {
+                    // Re-open the editor so the user can fix the value.
+                    self.status = msg;
+                    self.input = Some(InputState {
+                        title: format!("Edit {key}"),
+                        prompt: "Value:".into(),
+                        buffer: state.buffer,
+                        action: InputAction::EditSecret { key },
+                    });
+                } else if let Some(e) = self.current_env_mut() {
                     e.values.insert(key.clone(), state.buffer);
                     self.save();
                     self.status = format!("Updated `{key}`.");
@@ -1347,7 +1455,8 @@ impl App {
                 self.import_choice = Some(value);
             }
             InputAction::Export => {
-                self.do_export(&value);
+                // Defer until the user picks a format.
+                self.export_choice = Some(value);
             }
         }
         self.clamp_indices();
@@ -1412,6 +1521,7 @@ impl App {
                 let count = parsed.len();
                 env.values.clear();
                 env.values.extend(parsed);
+                prune_types(env);
                 self.save();
                 self.status = format!("Imported {count} secrets from {path} (replaced env).");
             }
@@ -1526,7 +1636,30 @@ impl App {
         }
     }
 
-    fn do_export(&mut self, path: &str) {
+    /// Keys for the export-format chooser.
+    fn on_export_choice_key(&mut self, key: KeyEvent) -> Result<()> {
+        let fmt = match key.code {
+            KeyCode::Char('e') | KeyCode::Enter => Some(Format::Env),
+            KeyCode::Char('s') => Some(Format::Shell),
+            KeyCode::Char('j') => Some(Format::Json),
+            KeyCode::Char('t') => Some(Format::Toml),
+            _ => None,
+        };
+        match fmt {
+            Some(fmt) => {
+                if let Some(path) = self.export_choice.take() {
+                    self.do_export(&path, fmt);
+                }
+            }
+            None => {
+                self.export_choice = None;
+                self.status = "Export cancelled.".into();
+            }
+        }
+        Ok(())
+    }
+
+    fn do_export(&mut self, path: &str, fmt: Format) {
         let (Some(project), Some(env)) = (self.current_project_name(), self.current_env_name())
         else {
             return;
@@ -1547,7 +1680,13 @@ impl App {
                 }
             }
         }
-        let output = envfile::serialize(&resolved);
+        let output = match crate::commands::render(&resolved, fmt) {
+            Ok(o) => o,
+            Err(e) => {
+                self.status = format!("Export failed: {e}");
+                return;
+            }
+        };
         match std::fs::write(path, output) {
             Ok(()) => {
                 self.status = format!("Exported {} secrets to {path}.", resolved.len());
@@ -1676,6 +1815,7 @@ impl App {
         if let Some(p) = self.handle.store.project_mut(&ed.project) {
             if let Some(e) = p.environments.get_mut(&ed.env) {
                 e.values = parsed;
+                prune_types(e);
             }
         }
         self.save();
@@ -1718,6 +1858,7 @@ impl App {
                 if let Some(p) = self.handle.store.project_mut(&project) {
                     if let Some(e) = p.environments.get_mut(&env) {
                         e.values.shift_remove(&key);
+                        e.types.shift_remove(&key);
                     }
                 }
                 self.status = format!("Deleted secret `{key}`.");
@@ -1753,9 +1894,39 @@ impl App {
         if let Some(session) = &self.import_session {
             self.draw_import_session(f, session);
         }
+        if let Some(path) = &self.export_choice {
+            self.draw_export_choice(f, path);
+        }
         if let Some(editor) = &self.editor {
             self.draw_editor(f, editor);
         }
+    }
+
+    fn draw_export_choice(&self, f: &mut Frame, path: &str) {
+        let area = centered_rect(64, 9, f.area());
+        f.render_widget(Clear, area);
+        let block = Block::default()
+            .borders(Borders::ALL)
+            .border_style(Style::default().fg(ACCENT))
+            .title(" Export — choose format ");
+        let inner = Paragraph::new(vec![
+            Line::from(Span::styled(
+                format!("To {path}"),
+                Style::default().fg(Color::Gray),
+            )),
+            Line::from(""),
+            Line::from("  e  .env       KEY=VALUE"),
+            Line::from("  s  shell      export KEY=VALUE"),
+            Line::from("  j  json       { \"KEY\": \"VALUE\" }"),
+            Line::from("  t  toml       KEY = \"VALUE\""),
+            Line::from(Span::styled(
+                "  Enter = env   ·   Esc cancel",
+                Style::default().fg(Color::DarkGray),
+            )),
+        ])
+        .block(block)
+        .wrap(Wrap { trim: false });
+        f.render_widget(inner, area);
     }
 
     fn draw_editor(&self, f: &mut Frame, ed: &EnvEditor) {
@@ -1969,17 +2140,10 @@ impl App {
                 .and_then(|e| e.values.get_index(idx))
                 .map(|(_, v)| v.clone())
                 .unwrap_or_default();
-            let value_style = if is_reference(&v) {
-                Style::default().fg(Color::Blue)
-            } else {
-                Style::default().fg(Color::Gray)
-            };
-            items.push(ListItem::new(highlight_line(
-                name,
-                &matches,
-                format!("  = {}", display_value(&v, self.reveal)),
-                value_style,
-            )));
+            let mut spans = name_spans(name, &matches, Style::default());
+            spans.push(Span::styled("  = ", Style::default().fg(Color::DarkGray)));
+            spans.extend(value_spans(&v, self.reveal));
+            items.push(ListItem::new(Line::from(spans)));
         }
 
         let block = Block::default()
@@ -2099,16 +2263,12 @@ impl App {
         let name = self.current_env_name().unwrap_or_default();
         let mut lines = vec![heading(&name), Line::from("")];
         for (k, v) in &e.values {
-            let value_style = if is_reference(v) {
-                Style::default().fg(Color::Blue)
-            } else {
-                Style::default().fg(Color::Gray)
-            };
-            lines.push(Line::from(vec![
+            let mut spans = vec![
                 Span::styled(k.clone(), Style::default().fg(Color::Yellow)),
                 Span::raw(" = "),
-                Span::styled(display_value(v, self.reveal), value_style),
-            ]));
+            ];
+            spans.extend(value_spans(v, self.reveal));
+            lines.push(Line::from(spans));
         }
         if e.values.is_empty() {
             lines.push(Line::from(Span::styled(
@@ -2136,16 +2296,18 @@ impl App {
             .value(&project, &env, &key)
             .cloned()
             .unwrap_or_default();
-        let mut lines = vec![heading(&key), Line::from("")];
-        let value_style = if is_reference(&raw) {
-            Style::default().fg(Color::Blue)
-        } else {
-            Style::default().fg(Color::White)
-        };
-        lines.push(Line::from(vec![
-            Span::styled("value: ", Style::default().fg(Color::Gray)),
-            Span::styled(display_value(&raw, self.reveal), value_style),
-        ]));
+        let kind = self.current_env().map(|e| e.kind(&key)).unwrap_or_default();
+        let mut lines = vec![
+            heading(&key),
+            Line::from(Span::styled(
+                format!("type: {}", kind.label()),
+                Style::default().fg(Color::DarkGray),
+            )),
+            Line::from(""),
+        ];
+        let mut value_line = vec![Span::styled("value: ", Style::default().fg(Color::Gray))];
+        value_line.extend(value_spans(&raw, self.reveal));
+        lines.push(Line::from(value_line));
         // If the value contains references, show the resolved result too.
         if is_reference(&raw) {
             match resolve::resolve_at(&self.handle.store, &project, &env, &key) {
@@ -2168,7 +2330,7 @@ impl App {
         }
         lines.push(Line::from(""));
         lines.push(Line::from(Span::styled(
-            "Enter/e edit · c copy · d delete · s show/hide",
+            "Enter/e edit · g goto ref · c copy · d delete · s show",
             Style::default().fg(Color::DarkGray),
         )));
         lines
@@ -2295,14 +2457,14 @@ impl App {
 
     fn draw_kv(&self, f: &mut Frame, form: &KvInputState) {
         let ac = self.ac_render_lines();
-        let height = 3 + ac.len() as u16 + 2;
+        let height = 4 + ac.len() as u16 + 2;
         let area = centered_rect(60, height, f.area());
         f.render_widget(Clear, area);
         let block = Block::default()
             .borders(Borders::ALL)
             .border_style(Style::default().fg(Color::Cyan))
             .title(" New secret ")
-            .title_bottom(" Tab: switch field   Enter: next/confirm   Esc: cancel ");
+            .title_bottom(" Tab: field   Enter: next/confirm   Esc: cancel ");
 
         let field = |label: &str, value: &str, active: bool| -> Line {
             let label_style = if active {
@@ -2322,9 +2484,36 @@ impl App {
             ])
         };
 
+        // The Type field shows the kinds with the active one highlighted.
+        let type_active = form.active == KvField::Type;
+        let type_label_style = if type_active {
+            Style::default()
+                .fg(Color::Cyan)
+                .add_modifier(Modifier::BOLD)
+        } else {
+            Style::default().fg(Color::Gray)
+        };
+        let mut type_spans = vec![Span::styled(format!("{:<7}", "Type:"), type_label_style)];
+        for k in [Kind::Text, Kind::Number, Kind::Json] {
+            let style = if k == form.kind {
+                Style::default()
+                    .fg(Color::Black)
+                    .bg(ACCENT)
+                    .add_modifier(Modifier::BOLD)
+            } else {
+                Style::default().fg(Color::DarkGray)
+            };
+            type_spans.push(Span::styled(format!(" {} ", k.label()), style));
+            type_spans.push(Span::raw(" "));
+        }
+        if type_active {
+            type_spans.push(Span::styled("(←/→)", Style::default().fg(Color::DarkGray)));
+        }
+
         let mut lines = vec![
             field("Key:", &form.key, form.active == KvField::Key),
             field("Value:", &form.value, form.active == KvField::Value),
+            Line::from(type_spans),
         ];
         lines.extend(ac);
         f.render_widget(
@@ -2422,33 +2611,59 @@ impl App {
     }
 
     fn draw_help(&self, f: &mut Frame) {
-        let area = centered_rect(72, 22, f.area());
+        let area = centered_rect(64, 26, f.area());
         f.render_widget(Clear, area);
         let block = Block::default()
             .borders(Borders::ALL)
+            .border_type(BorderType::Rounded)
             .border_style(Style::default().fg(Color::Cyan))
             .title(" Help — press any key to close ");
+
+        let head = |t: &str| {
+            Line::from(Span::styled(
+                t.to_string(),
+                Style::default().fg(ACCENT).add_modifier(Modifier::BOLD),
+            ))
+        };
+        let item = |k: &str, desc: &str| {
+            Line::from(vec![
+                Span::styled(format!("  {k:<7}"), Style::default().fg(Color::Yellow)),
+                Span::raw(desc.to_string()),
+            ])
+        };
+
         let lines = vec![
-            Line::from("Navigation (Projects + Environments share one tree)"),
-            Line::from("  /           fuzzy-filter (matches projects and environments)"),
-            Line::from("  ↑/k ↓/j     move selection (Ctrl-n/Ctrl-p while searching)"),
-            Line::from("  →/l         expand project / open environment → Secrets"),
-            Line::from("  ←/h         collapse project / jump to parent project"),
-            Line::from("  Enter       toggle a project, or open an environment"),
+            head("Navigation (Projects + Environments share one tree)"),
+            item("/", "fuzzy-filter (matches projects and environments)"),
+            item("↑/k ↓/j", "move selection (Ctrl-n/Ctrl-p while searching)"),
+            item("→/l", "expand project / open environment → Secrets"),
+            item("←/h", "collapse project / jump to parent project"),
+            item("Enter", "toggle a project, or open an environment"),
+            item("g", "go to the secret a reference points at"),
             Line::from(""),
-            Line::from("Actions"),
-            Line::from("  p  new project          n  new env / new secret (on Secrets)"),
-            Line::from("  e  edit (secret, or whole env inline)   a  inline env editor"),
-            Line::from("  E  edit env in $EDITOR   c/C  copy secret value / whole env"),
-            Line::from("  d  delete (project / env / secret)   y  duplicate environment"),
-            Line::from("  i  import .env    x  export .env    D  set default env"),
-            Line::from("  f  assign current folder to this project/env"),
-            Line::from("  s  toggle showing/hiding secret values"),
+            head("Actions"),
+            item("p", "new project"),
+            item("n", "new environment (or new secret on Secrets)"),
+            item("e", "edit secret, or the env inline"),
+            item("a / E", "edit env inline / in $EDITOR"),
+            item("c / C", "copy secret value / whole env"),
+            item("d", "delete project / env / secret"),
+            item("y", "duplicate environment"),
+            item("i / x", "import / export .env"),
+            item("D", "set default env"),
+            item("f", "assign current folder to this project/env"),
+            item("s", "toggle showing/hiding secret values"),
             Line::from(""),
-            Line::from("References: ${secret} / ${env.secret} / ${project.env.secret}"),
-            Line::from("Quit: q or Ctrl-C"),
+            head("References"),
+            item("", "${secret} · ${env.secret} · ${project.env.secret}"),
+            item("q", "quit (also Ctrl-C)"),
         ];
-        f.render_widget(Paragraph::new(lines).block(block), area);
+        f.render_widget(
+            Paragraph::new(lines)
+                .block(block)
+                .wrap(Wrap { trim: false }),
+            area,
+        );
     }
 }
 
@@ -2468,25 +2683,10 @@ fn window_area(area: Rect) -> Rect {
 
 /// Build a result line: `name` with matched characters highlighted, followed
 /// by a styled `suffix`.
-fn highlight_line(
-    name: &str,
-    matches: &[usize],
-    suffix: String,
-    suffix_style: Style,
-) -> Line<'static> {
-    let mut spans = Vec::new();
-    for (i, ch) in name.chars().enumerate() {
-        let style = if matches.contains(&i) {
-            Style::default().fg(ACCENT).add_modifier(Modifier::BOLD)
-        } else {
-            Style::default()
-        };
-        spans.push(Span::styled(ch.to_string(), style));
-    }
-    if !suffix.is_empty() {
-        spans.push(Span::styled(suffix, suffix_style));
-    }
-    Line::from(spans)
+/// Drop type entries whose key no longer exists in `env.values`.
+fn prune_types(env: &mut Environment) {
+    let present: HashSet<String> = env.values.keys().cloned().collect();
+    env.types.retain(|k, _| present.contains(k));
 }
 
 /// A bold heading line for the preview pane.
@@ -2515,13 +2715,19 @@ fn name_spans(name: &str, matches: &[usize], base: Style) -> Vec<Span<'static>> 
 fn mask(value: &str) -> String {
     let len = value.chars().count();
     if len == 0 {
-        "(empty)".into()
-    } else if len <= 4 {
-        "•".repeat(len)
-    } else {
-        let head: String = value.chars().take(2).collect();
-        format!("{head}{}", "•".repeat(6))
+        return "(empty)".into();
     }
+    if len <= 4 {
+        return "•".repeat(len);
+    }
+    // Only hint with leading alphanumerics so structured values (JSON `{"`,
+    // arrays `[`, quoted strings) don't leak their shape.
+    let head: String = value
+        .chars()
+        .take(2)
+        .take_while(|c| c.is_alphanumeric())
+        .collect();
+    format!("{head}{}", "•".repeat(6))
 }
 
 /// Whether a value contains at least one `${…}` reference.
@@ -2529,38 +2735,47 @@ fn is_reference(value: &str) -> bool {
     value.contains("${")
 }
 
-/// Render `${a.b.c}` references as the friendlier `ref:a.b.c`, leaving the
-/// surrounding literal text intact.
-fn ref_display(raw: &str) -> String {
-    let mut out = String::with_capacity(raw.len());
-    let mut rest = raw;
-    while let Some(start) = rest.find("${") {
-        out.push_str(&rest[..start]);
-        let after = &rest[start + 2..];
-        if let Some(end) = after.find('}') {
-            out.push_str("ref:");
-            out.push_str(&after[..end]);
-            rest = &after[end + 1..];
-        } else {
-            out.push_str(&rest[start..]);
-            return out;
-        }
-    }
-    out.push_str(rest);
-    out
+/// The inner text of the first `${…}` reference in `raw`, if any.
+fn first_reference(raw: &str) -> Option<String> {
+    let start = raw.find("${")?;
+    let after = &raw[start + 2..];
+    let end = after.find('}')?;
+    Some(after[..end].to_string())
 }
 
-/// How a secret value is shown in the UI: references are revealed as
-/// `ref:project.env.key` (they aren't secret), other values are masked unless
-/// `reveal` is set.
-fn display_value(raw: &str, reveal: bool) -> String {
-    if is_reference(raw) {
-        ref_display(raw)
-    } else if reveal {
-        raw.to_string()
-    } else {
-        mask(raw)
+/// Spans for a secret value. References are shown in clear as
+/// `$ref:project.env.key` (they aren't secret) with a coloured `$ref:` prefix;
+/// other values are masked unless `reveal` is set.
+fn value_spans(raw: &str, reveal: bool) -> Vec<Span<'static>> {
+    if !is_reference(raw) {
+        let shown = if reveal { raw.to_string() } else { mask(raw) };
+        return vec![Span::styled(shown, Style::default().fg(Color::Gray))];
     }
+    let lit = Style::default().fg(Color::Gray);
+    let prefix = Style::default()
+        .fg(Color::Magenta)
+        .add_modifier(Modifier::BOLD);
+    let target = Style::default().fg(Color::Blue);
+    let mut spans = Vec::new();
+    let mut rest = raw;
+    while let Some(start) = rest.find("${") {
+        if start > 0 {
+            spans.push(Span::styled(rest[..start].to_string(), lit));
+        }
+        let after = &rest[start + 2..];
+        if let Some(end) = after.find('}') {
+            spans.push(Span::styled("$ref:", prefix));
+            spans.push(Span::styled(after[..end].to_string(), target));
+            rest = &after[end + 1..];
+        } else {
+            spans.push(Span::styled(rest[start..].to_string(), lit));
+            return spans;
+        }
+    }
+    if !rest.is_empty() {
+        spans.push(Span::styled(rest.to_string(), lit));
+    }
+    spans
 }
 
 /// Build the `.env` document shown to the user in their editor.
