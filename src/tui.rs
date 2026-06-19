@@ -1962,6 +1962,32 @@ impl App {
         f.render_widget(Paragraph::new(line), inner);
     }
 
+    /// Whether an unclosed `${…` token is open in the active value field.
+    fn ac_open(&self) -> bool {
+        if self.ac_dismissed {
+            return false;
+        }
+        self.ac_target()
+            .and_then(|(b, _)| open_ref_query(&b))
+            .is_some()
+    }
+
+    /// Lines for the autocomplete area: the candidate list, or a hint when a
+    /// `${…` token is open but nothing matches.
+    fn ac_render_lines(&self) -> Vec<Line<'static>> {
+        let cands = self.autocomplete_candidates();
+        if !cands.is_empty() {
+            return self.ac_lines(&cands);
+        }
+        if self.ac_open() {
+            return vec![Line::from(Span::styled(
+                "references — (no other secrets to reference yet)",
+                Style::default().fg(Color::DarkGray),
+            ))];
+        }
+        Vec::new()
+    }
+
     /// Suggestion lines for the autocomplete popup (empty when not active).
     fn ac_lines(&self, cands: &[String]) -> Vec<Line<'static>> {
         if cands.is_empty() {
@@ -1987,8 +2013,7 @@ impl App {
     }
 
     fn draw_input(&self, f: &mut Frame, input: &InputState) {
-        let cands = self.autocomplete_candidates();
-        let ac = self.ac_lines(&cands);
+        let ac = self.ac_render_lines();
         let height = 3 + ac.len() as u16 + 2;
         let area = centered_rect(60, height, f.area());
         f.render_widget(Clear, area);
@@ -2022,8 +2047,7 @@ impl App {
     }
 
     fn draw_kv(&self, f: &mut Frame, form: &KvInputState) {
-        let cands = self.autocomplete_candidates();
-        let ac = self.ac_lines(&cands);
+        let ac = self.ac_render_lines();
         let height = 3 + ac.len() as u16 + 2;
         let area = centered_rect(60, height, f.area());
         f.render_widget(Clear, area);
