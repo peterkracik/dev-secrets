@@ -6,6 +6,7 @@ mod clip;
 mod commands;
 mod config;
 mod envfile;
+mod fuzzy;
 mod model;
 mod resolve;
 mod store;

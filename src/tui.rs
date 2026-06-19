@@ -1,20 +1,30 @@
-//! The interactive, k9s-style terminal UI.
+//! The interactive, Telescope-style terminal UI.
 //!
-//! Three master/detail panes — Projects → Environments → Secrets — are shown
-//! side by side. Focus moves rightward as you drill in. Every mutating action
-//! is available through a single keypress and persists immediately.
+//! A centered, bounded floating window presents one "picker" at a time as you
+//! drill through Projects → Environments → Secrets. Each picker has a fuzzy
+//! filter prompt, a results list with match highlighting, and a live preview
+//! pane. Every mutating action is a single keypress and persists immediately.
 
 use anyhow::Result;
 use ratatui::crossterm::event::{self, Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
 use ratatui::layout::{Constraint, Direction, Layout, Margin, Rect};
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
-use ratatui::widgets::{Block, Borders, Clear, List, ListItem, ListState, Paragraph, Wrap};
+use ratatui::widgets::{
+    Block, BorderType, Borders, Clear, List, ListItem, ListState, Paragraph, Wrap,
+};
 use ratatui::{Frame, Terminal};
 
+use crate::fuzzy;
 use crate::model::{Environment, Project};
 use crate::store::StoreHandle;
 use crate::{envfile, resolve};
+
+/// Accent colour used throughout the UI.
+const ACCENT: Color = Color::Cyan;
+/// Maximum size of the floating window; it never fills the whole terminal.
+const MAX_WIDTH: u16 = 110;
+const MAX_HEIGHT: u16 = 34;
 
 /// Which pane currently has keyboard focus.
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -179,6 +189,10 @@ pub struct App {
     secret_idx: usize,
     reveal: bool,
     show_help: bool,
+    /// Current fuzzy filter for the active picker.
+    query: String,
+    /// Whether keystrokes are being typed into the filter prompt.
+    searching: bool,
     status: String,
     input: Option<InputState>,
     /// Active two-field new-secret form, if any.
@@ -212,7 +226,9 @@ impl App {
             secret_idx: 0,
             reveal: false,
             show_help: false,
-            status: "Welcome to dev-secrets. Press ? for help.".to_string(),
+            query: String::new(),
+            searching: false,
+            status: "Welcome to dev-secrets. Press / to search, ? for help.".to_string(),
             input: None,
             kv_input: None,
             confirm: None,
@@ -320,7 +336,43 @@ impl App {
             self.show_help = false;
             return Ok(());
         }
+        if self.searching {
+            return self.on_search_key(key);
+        }
         self.on_nav_key(key)
+    }
+
+    /// Keys while the fuzzy filter prompt is focused.
+    fn on_search_key(&mut self, key: KeyEvent) -> Result<()> {
+        match (key.code, key.modifiers) {
+            (KeyCode::Char('c'), KeyModifiers::CONTROL) => self.should_quit = true,
+            (KeyCode::Esc, _) => {
+                self.searching = false;
+                self.query.clear();
+                self.sync_selection();
+            }
+            (KeyCode::Enter, _) => {
+                // Accept the filter and open the highlighted item.
+                self.searching = false;
+                self.on_enter();
+            }
+            (KeyCode::Backspace, _) => {
+                self.query.pop();
+                self.sync_selection();
+            }
+            (KeyCode::Down, _) | (KeyCode::Char('n'), KeyModifiers::CONTROL) => {
+                self.move_selection(1)
+            }
+            (KeyCode::Up, _) | (KeyCode::Char('p'), KeyModifiers::CONTROL) => {
+                self.move_selection(-1)
+            }
+            (KeyCode::Char(c), m) if !m.contains(KeyModifiers::CONTROL) => {
+                self.query.push(c);
+                self.sync_selection();
+            }
+            _ => {}
+        }
+        Ok(())
     }
 
     fn on_nav_key(&mut self, key: KeyEvent) -> Result<()> {
@@ -328,13 +380,15 @@ impl App {
             (KeyCode::Char('c'), KeyModifiers::CONTROL) | (KeyCode::Char('q'), _) => {
                 self.should_quit = true;
             }
+            (KeyCode::Char('/'), _) => self.searching = true,
             (KeyCode::Char('?'), _) => self.show_help = true,
             (KeyCode::Char('s'), _) => self.reveal = !self.reveal,
-            (KeyCode::Tab, _) => self.cycle_focus(),
             (KeyCode::Down, _) | (KeyCode::Char('j'), _) => self.move_selection(1),
             (KeyCode::Up, _) | (KeyCode::Char('k'), _) => self.move_selection(-1),
             (KeyCode::Right, _) | (KeyCode::Char('l'), _) => self.focus_deeper(),
-            (KeyCode::Left, _) | (KeyCode::Char('h'), _) => self.focus_shallower(),
+            (KeyCode::Left, _) | (KeyCode::Char('h'), _) | (KeyCode::Esc, _) => {
+                self.focus_shallower()
+            }
             (KeyCode::Enter, _) => self.on_enter(),
             (KeyCode::Char('n'), _) => self.start_new(),
             (KeyCode::Char('e'), _) => self.start_edit(),
@@ -353,28 +407,38 @@ impl App {
         Ok(())
     }
 
-    fn cycle_focus(&mut self) {
-        self.focus = match self.focus {
-            Focus::Projects => Focus::Envs,
-            Focus::Envs => Focus::Secrets,
-            Focus::Secrets => Focus::Projects,
-        };
+    fn reset_query(&mut self) {
+        self.query.clear();
+        self.searching = false;
     }
 
     fn focus_deeper(&mut self) {
         match self.focus {
-            Focus::Projects if self.current_project().is_some() => self.focus = Focus::Envs,
-            Focus::Envs if self.current_env().is_some() => self.focus = Focus::Secrets,
+            Focus::Projects if self.current_project().is_some() => {
+                self.focus = Focus::Envs;
+                self.reset_query();
+                self.env_idx = 0;
+                self.secret_idx = 0;
+            }
+            Focus::Envs if self.current_env().is_some() => {
+                self.focus = Focus::Secrets;
+                self.reset_query();
+                self.secret_idx = 0;
+            }
             _ => {}
         }
     }
 
     fn focus_shallower(&mut self) {
-        self.focus = match self.focus {
+        let new = match self.focus {
             Focus::Secrets => Focus::Envs,
             Focus::Envs => Focus::Projects,
             Focus::Projects => Focus::Projects,
         };
+        if new != self.focus {
+            self.focus = new;
+            self.reset_query();
+        }
     }
 
     fn on_enter(&mut self) {
@@ -384,34 +448,84 @@ impl App {
         }
     }
 
-    fn move_selection(&mut self, delta: i32) {
-        let count = match self.focus {
-            Focus::Projects => self.handle.store.projects.len(),
+    /// Names of the items in the active picker, in store order (used both for
+    /// fuzzy matching and as display labels).
+    fn level_labels(&self) -> Vec<String> {
+        match self.focus {
+            Focus::Projects => self.handle.store.projects.keys().cloned().collect(),
             Focus::Envs => self
                 .current_project()
-                .map(|p| p.environments.len())
-                .unwrap_or(0),
-            Focus::Secrets => self.current_env().map(|e| e.values.len()).unwrap_or(0),
-        };
-        if count == 0 {
-            return;
+                .map(|p| p.environments.keys().cloned().collect())
+                .unwrap_or_default(),
+            Focus::Secrets => self
+                .current_env()
+                .map(|e| e.values.keys().cloned().collect())
+                .unwrap_or_default(),
         }
-        let idx = match self.focus {
-            Focus::Projects => &mut self.proj_idx,
-            Focus::Envs => &mut self.env_idx,
-            Focus::Secrets => &mut self.secret_idx,
-        };
-        let new = (*idx as i32 + delta).rem_euclid(count as i32) as usize;
-        *idx = new;
-        // Reset deeper selections when moving in a parent pane.
+    }
+
+    /// Real indices of the active picker's items that match the current query,
+    /// best match first. With an empty query this is every item in order.
+    fn filtered_indices(&self) -> Vec<usize> {
+        let labels = self.level_labels();
+        if self.query.is_empty() {
+            return (0..labels.len()).collect();
+        }
+        let mut scored: Vec<(i32, usize)> = labels
+            .iter()
+            .enumerate()
+            .filter_map(|(i, label)| fuzzy::score(&self.query, label).map(|(s, _)| (s, i)))
+            .collect();
+        scored.sort_by(|a, b| b.0.cmp(&a.0).then(a.1.cmp(&b.1)));
+        scored.into_iter().map(|(_, i)| i).collect()
+    }
+
+    /// Real index of the active picker's current selection.
+    fn cur_index(&self) -> usize {
+        match self.focus {
+            Focus::Projects => self.proj_idx,
+            Focus::Envs => self.env_idx,
+            Focus::Secrets => self.secret_idx,
+        }
+    }
+
+    /// Move the active picker's selection to real index `i`, resetting any
+    /// deeper selections.
+    fn set_cur_index(&mut self, i: usize) {
         match self.focus {
             Focus::Projects => {
+                self.proj_idx = i;
                 self.env_idx = 0;
                 self.secret_idx = 0;
             }
-            Focus::Envs => self.secret_idx = 0,
-            Focus::Secrets => {}
+            Focus::Envs => {
+                self.env_idx = i;
+                self.secret_idx = 0;
+            }
+            Focus::Secrets => self.secret_idx = i,
         }
+    }
+
+    /// Keep the selection on a visible (matching) item after the query changes.
+    fn sync_selection(&mut self) {
+        let f = self.filtered_indices();
+        if f.is_empty() {
+            return;
+        }
+        if !f.contains(&self.cur_index()) {
+            self.set_cur_index(f[0]);
+        }
+    }
+
+    fn move_selection(&mut self, delta: i32) {
+        let f = self.filtered_indices();
+        if f.is_empty() {
+            return;
+        }
+        let cur = self.cur_index();
+        let pos = f.iter().position(|&i| i == cur).unwrap_or(0);
+        let new = (pos as i32 + delta).rem_euclid(f.len() as i32) as usize;
+        self.set_cur_index(f[new]);
     }
 
     // --- action starters ---------------------------------------------------
@@ -1104,18 +1218,10 @@ impl App {
     // --- rendering ---------------------------------------------------------
 
     fn draw(&self, f: &mut Frame) {
-        let chunks = Layout::default()
-            .direction(Direction::Vertical)
-            .constraints([
-                Constraint::Length(1),
-                Constraint::Min(3),
-                Constraint::Length(1),
-            ])
-            .split(f.area());
-
-        self.draw_title(f, chunks[0]);
-        self.draw_panes(f, chunks[1]);
-        self.draw_status(f, chunks[2]);
+        // Blank the whole screen, then float a bounded window in the centre.
+        f.render_widget(Clear, f.area());
+        let win = window_area(f.area());
+        self.draw_window(f, win);
 
         if self.show_help {
             self.draw_help(f);
@@ -1173,156 +1279,322 @@ impl App {
         f.set_cursor_position((cursor_x, cursor_y));
     }
 
-    fn draw_title(&self, f: &mut Frame, area: Rect) {
-        let title = Line::from(vec![
-            Span::styled(
-                " dev-secrets ",
-                Style::default()
-                    .fg(Color::Black)
-                    .bg(Color::Cyan)
-                    .add_modifier(Modifier::BOLD),
-            ),
-            Span::raw("  "),
-            Span::styled(
-                format!("store: {}", self.handle.path.display()),
-                Style::default().fg(Color::DarkGray),
-            ),
-        ]);
-        f.render_widget(Paragraph::new(title), area);
-    }
-
-    fn draw_panes(&self, f: &mut Frame, area: Rect) {
-        let cols = Layout::default()
-            .direction(Direction::Horizontal)
-            .constraints([
-                Constraint::Percentage(28),
-                Constraint::Percentage(28),
-                Constraint::Percentage(44),
-            ])
-            .split(area);
-
-        // Projects pane
-        let proj_items: Vec<ListItem> = self
-            .handle
-            .store
-            .projects
-            .iter()
-            .map(|(name, p)| ListItem::new(format!("{name} ({})", p.environments.len())))
-            .collect();
-        self.render_list(
-            f,
-            cols[0],
-            "Projects",
-            proj_items,
-            self.proj_idx,
-            self.focus == Focus::Projects,
-        );
-
-        // Environments pane
-        let env_items: Vec<ListItem> = self
-            .current_project()
-            .map(|p| {
-                p.environments
-                    .iter()
-                    .map(|(name, e)| {
-                        let default = if p.default_env.as_deref() == Some(name) {
-                            " *"
-                        } else {
-                            ""
-                        };
-                        ListItem::new(format!("{name}{default} ({})", e.values.len()))
-                    })
-                    .collect()
-            })
-            .unwrap_or_default();
-        self.render_list(
-            f,
-            cols[1],
-            "Environments",
-            env_items,
-            self.env_idx,
-            self.focus == Focus::Envs,
-        );
-
-        // Secrets pane
-        let secret_items: Vec<ListItem> = self
-            .current_env()
-            .map(|e| {
-                e.values
-                    .iter()
-                    .map(|(k, v)| {
-                        let shown = if self.reveal { v.clone() } else { mask(v) };
-                        ListItem::new(Line::from(vec![
-                            Span::styled(k.clone(), Style::default().fg(Color::Yellow)),
-                            Span::raw(" = "),
-                            Span::raw(shown),
-                        ]))
-                    })
-                    .collect()
-            })
-            .unwrap_or_default();
-        let secret_title = if self.reveal {
-            "Secrets [shown]"
-        } else {
-            "Secrets [hidden]"
-        };
-        self.render_list(
-            f,
-            cols[2],
-            secret_title,
-            secret_items,
-            self.secret_idx,
-            self.focus == Focus::Secrets,
-        );
-    }
-
-    fn render_list(
-        &self,
-        f: &mut Frame,
-        area: Rect,
-        title: &str,
-        items: Vec<ListItem>,
-        selected: usize,
-        focused: bool,
-    ) {
-        let border_style = if focused {
-            Style::default().fg(Color::Cyan)
-        } else {
-            Style::default().fg(Color::DarkGray)
-        };
-        let highlight = if focused {
-            Style::default()
-                .bg(Color::Cyan)
-                .fg(Color::Black)
-                .add_modifier(Modifier::BOLD)
-        } else {
-            Style::default().add_modifier(Modifier::DIM)
-        };
+    /// Draw the whole floating window: outer frame, results, preview, prompt.
+    fn draw_window(&self, f: &mut Frame, area: Rect) {
         let block = Block::default()
             .borders(Borders::ALL)
-            .border_style(border_style)
-            .title(format!(" {title} "));
+            .border_type(BorderType::Rounded)
+            .border_style(Style::default().fg(ACCENT))
+            .title(Line::from(vec![
+                Span::raw(" "),
+                Span::styled(
+                    "dev-secrets",
+                    Style::default().fg(ACCENT).add_modifier(Modifier::BOLD),
+                ),
+                Span::styled(
+                    format!("  ▸  {} ", self.breadcrumb()),
+                    Style::default().fg(Color::Gray),
+                ),
+            ]))
+            .title_bottom(
+                Line::from(format!(" {} ", self.status)).left_aligned(),
+            )
+            .title_bottom(
+                Line::from(Span::styled(
+                    " / search · n new · e edit · c copy · d del · ? help · q quit ",
+                    Style::default().fg(Color::DarkGray),
+                ))
+                .right_aligned(),
+            );
+        let inner = block.inner(area);
+        f.render_widget(block, area);
+
+        let rows = Layout::default()
+            .direction(Direction::Vertical)
+            .constraints([Constraint::Min(3), Constraint::Length(3)])
+            .split(inner);
+        let cols = Layout::default()
+            .direction(Direction::Horizontal)
+            .constraints([Constraint::Percentage(42), Constraint::Percentage(58)])
+            .split(rows[0]);
+
+        self.draw_results(f, cols[0]);
+        self.draw_preview(f, cols[1]);
+        self.draw_prompt(f, rows[1]);
+    }
+
+    /// Breadcrumb shown in the window title, e.g. `api ▸ dev ▸ Secrets`.
+    fn breadcrumb(&self) -> String {
+        match self.focus {
+            Focus::Projects => "Projects".to_string(),
+            Focus::Envs => format!(
+                "{} ▸ Environments",
+                self.current_project_name().unwrap_or_default()
+            ),
+            Focus::Secrets => format!(
+                "{} ▸ {} ▸ Secrets",
+                self.current_project_name().unwrap_or_default(),
+                self.current_env_name().unwrap_or_default()
+            ),
+        }
+    }
+
+    /// The filtered results list with fuzzy-match highlighting.
+    fn draw_results(&self, f: &mut Frame, area: Rect) {
+        let labels = self.level_labels();
+        let filtered = self.filtered_indices();
+        let cur = self.cur_index();
+
+        let mut items: Vec<ListItem> = Vec::with_capacity(filtered.len());
+        let mut selected_row = 0;
+        for (row, &idx) in filtered.iter().enumerate() {
+            if idx == cur {
+                selected_row = row;
+            }
+            let name = &labels[idx];
+            let matches = fuzzy::score(&self.query, name)
+                .map(|(_, m)| m)
+                .unwrap_or_default();
+            let (suffix, suffix_style) = self.result_suffix(idx);
+            items.push(ListItem::new(highlight_line(name, &matches, suffix, suffix_style)));
+        }
+
+        let title = format!(" Results  {}/{} ", filtered.len(), labels.len());
+        let block = Block::default()
+            .borders(Borders::ALL)
+            .border_type(BorderType::Rounded)
+            .border_style(Style::default().fg(Color::DarkGray))
+            .title(title);
+
+        if items.is_empty() {
+            let msg = if labels.is_empty() {
+                empty_hint(self.focus)
+            } else {
+                "No matches".to_string()
+            };
+            let p = Paragraph::new(Span::styled(msg, Style::default().fg(Color::DarkGray)))
+                .block(block);
+            f.render_widget(p, area);
+            return;
+        }
+
         let list = List::new(items)
             .block(block)
-            .highlight_style(highlight)
-            .highlight_symbol("› ");
+            .highlight_style(
+                Style::default()
+                    .bg(ACCENT)
+                    .fg(Color::Black)
+                    .add_modifier(Modifier::BOLD),
+            )
+            .highlight_symbol("▌");
         let mut state = ListState::default();
-        state.select(Some(selected));
+        state.select(Some(selected_row));
         f.render_stateful_widget(list, area, &mut state);
     }
 
-    fn draw_status(&self, f: &mut Frame, area: Rect) {
-        let keys =
-            "n:new e:edit a:edit-env E:$EDITOR c:copy C:copy-env d:del y:dup i:import x:export D:default f:folder s:show ?:help q:quit";
+    /// Trailing annotation for a result row (counts, default marker, value).
+    fn result_suffix(&self, idx: usize) -> (String, Style) {
+        match self.focus {
+            Focus::Projects => {
+                let count = self
+                    .handle
+                    .store
+                    .projects
+                    .get_index(idx)
+                    .map(|(_, p)| p.environments.len())
+                    .unwrap_or(0);
+                (format!("  {count} env"), Style::default().fg(Color::DarkGray))
+            }
+            Focus::Envs => {
+                let p = self.current_project();
+                let (name, count) = p
+                    .and_then(|p| p.environments.get_index(idx))
+                    .map(|(n, e)| (n.clone(), e.values.len()))
+                    .unwrap_or_default();
+                let is_default = p.and_then(|p| p.default_env.as_deref()) == Some(name.as_str());
+                let marker = if is_default { " ★" } else { "" };
+                (
+                    format!("{marker}  {count} keys"),
+                    Style::default().fg(Color::DarkGray),
+                )
+            }
+            Focus::Secrets => {
+                let v = self
+                    .current_env()
+                    .and_then(|e| e.values.get_index(idx))
+                    .map(|(_, v)| v.clone())
+                    .unwrap_or_default();
+                let shown = if self.reveal { v } else { mask(&v) };
+                (format!("  = {shown}"), Style::default().fg(Color::Gray))
+            }
+        }
+    }
+
+    /// The preview pane: details of the highlighted item.
+    fn draw_preview(&self, f: &mut Frame, area: Rect) {
+        let block = Block::default()
+            .borders(Borders::ALL)
+            .border_type(BorderType::Rounded)
+            .border_style(Style::default().fg(Color::DarkGray))
+            .title(" Preview ");
+        let lines = match self.focus {
+            Focus::Projects => self.preview_project(),
+            Focus::Envs => self.preview_env(),
+            Focus::Secrets => self.preview_secret(),
+        };
+        f.render_widget(
+            Paragraph::new(lines).block(block).wrap(Wrap { trim: false }),
+            area,
+        );
+    }
+
+    fn preview_project(&self) -> Vec<Line<'_>> {
+        let Some(p) = self.current_project() else {
+            return vec![Line::from(Span::styled(
+                "No project selected.",
+                Style::default().fg(Color::DarkGray),
+            ))];
+        };
+        let name = self.current_project_name().unwrap_or_default();
+        let mut lines = vec![
+            heading(&name),
+            Line::from(""),
+            Line::from(Span::styled(
+                format!("folder: {}", p.folder.as_deref().unwrap_or("(none)")),
+                Style::default().fg(Color::DarkGray),
+            )),
+            Line::from(Span::styled(
+                "environments:",
+                Style::default().fg(Color::Gray),
+            )),
+        ];
+        for (env, e) in &p.environments {
+            let def = if p.default_env.as_deref() == Some(env) {
+                " ★"
+            } else {
+                ""
+            };
+            lines.push(Line::from(vec![
+                Span::raw("  • "),
+                Span::styled(env.clone(), Style::default().fg(ACCENT)),
+                Span::styled(def, Style::default().fg(Color::Yellow)),
+                Span::styled(
+                    format!("  ({} keys)", e.values.len()),
+                    Style::default().fg(Color::DarkGray),
+                ),
+            ]));
+        }
+        if p.environments.is_empty() {
+            lines.push(Line::from(Span::styled(
+                "  (none yet — press n)",
+                Style::default().fg(Color::DarkGray),
+            )));
+        }
+        lines
+    }
+
+    fn preview_env(&self) -> Vec<Line<'_>> {
+        let Some(e) = self.current_env() else {
+            return vec![Line::from(Span::styled(
+                "No environment selected.",
+                Style::default().fg(Color::DarkGray),
+            ))];
+        };
+        let name = self.current_env_name().unwrap_or_default();
+        let mut lines = vec![heading(&name), Line::from("")];
+        for (k, v) in &e.values {
+            let shown = if self.reveal { v.clone() } else { mask(v) };
+            lines.push(Line::from(vec![
+                Span::styled(k.clone(), Style::default().fg(Color::Yellow)),
+                Span::raw(" = "),
+                Span::styled(shown, Style::default().fg(Color::Gray)),
+            ]));
+        }
+        if e.values.is_empty() {
+            lines.push(Line::from(Span::styled(
+                "(empty — press n to add a secret)",
+                Style::default().fg(Color::DarkGray),
+            )));
+        }
+        lines
+    }
+
+    fn preview_secret(&self) -> Vec<Line<'_>> {
+        let (Some(project), Some(env), Some(key)) = (
+            self.current_project_name(),
+            self.current_env_name(),
+            self.current_secret_key(),
+        ) else {
+            return vec![Line::from(Span::styled(
+                "No secret selected.",
+                Style::default().fg(Color::DarkGray),
+            ))];
+        };
+        let raw = self
+            .handle
+            .store
+            .value(&project, &env, &key)
+            .cloned()
+            .unwrap_or_default();
+        let mut lines = vec![heading(&key), Line::from("")];
+        let display_raw = if self.reveal { raw.clone() } else { mask(&raw) };
+        lines.push(Line::from(vec![
+            Span::styled("value: ", Style::default().fg(Color::Gray)),
+            Span::raw(display_raw),
+        ]));
+        // If the value contains references, show the resolved result too.
+        if raw.contains("${") {
+            match resolve::resolve_at(&self.handle.store, &project, &env, &key) {
+                Ok(resolved) => {
+                    let shown = if self.reveal { resolved } else { mask(&resolved) };
+                    lines.push(Line::from(vec![
+                        Span::styled("resolved: ", Style::default().fg(Color::Gray)),
+                        Span::styled(shown, Style::default().fg(Color::Green)),
+                    ]));
+                }
+                Err(e) => lines.push(Line::from(Span::styled(
+                    format!("resolved: <{e}>"),
+                    Style::default().fg(Color::Red),
+                ))),
+            }
+        }
+        lines.push(Line::from(""));
+        lines.push(Line::from(Span::styled(
+            "Enter/e edit · c copy · d delete · s show/hide",
+            Style::default().fg(Color::DarkGray),
+        )));
+        lines
+    }
+
+    /// The bottom prompt box with the fuzzy query.
+    fn draw_prompt(&self, f: &mut Frame, area: Rect) {
+        let border = if self.searching { ACCENT } else { Color::DarkGray };
+        let block = Block::default()
+            .borders(Borders::ALL)
+            .border_type(BorderType::Rounded)
+            .border_style(Style::default().fg(border))
+            .title(" Filter ");
+        let inner = block.inner(area);
+        f.render_widget(block, area);
+
+        let cursor = if self.searching { "▏" } else { "" };
         let line = Line::from(vec![
             Span::styled(
-                format!(" {} ", self.status),
-                Style::default().fg(Color::Green),
+                "❯ ",
+                Style::default().fg(ACCENT).add_modifier(Modifier::BOLD),
             ),
-            Span::raw("  "),
-            Span::styled(keys, Style::default().fg(Color::DarkGray)),
+            Span::raw(self.query.clone()),
+            Span::styled(cursor, Style::default().fg(ACCENT)),
+            if self.query.is_empty() && !self.searching {
+                Span::styled(
+                    "type / to fuzzy-filter",
+                    Style::default().fg(Color::DarkGray),
+                )
+            } else {
+                Span::raw("")
+            },
         ]);
-        f.render_widget(Paragraph::new(line).wrap(Wrap { trim: true }), area);
+        f.render_widget(Paragraph::new(line), inner);
     }
 
     fn draw_input(&self, f: &mut Frame, input: &InputState) {
@@ -1417,11 +1689,12 @@ impl App {
             .title(" Help — press any key to close ");
         let lines = vec![
             Line::from("Navigation"),
-            Line::from("  ↑/k ↓/j     move selection"),
+            Line::from("  /           fuzzy-filter the current list"),
+            Line::from("  ↑/k ↓/j     move selection (Ctrl-n/Ctrl-p while searching)"),
             Line::from("  →/l Enter   drill into Projects → Envs → Secrets"),
-            Line::from("  ←/h         go back   Tab: cycle panes"),
+            Line::from("  ←/h Esc     go back a level"),
             Line::from(""),
-            Line::from("Actions (context = focused pane)"),
+            Line::from("Actions (context = current level)"),
             Line::from("  n  new project / env / secret (secret uses Key + Value fields)"),
             Line::from("  e  edit secret (on Secrets) / whole env inline (otherwise)"),
             Line::from("  a  edit the whole environment inline (multi-line .env editor)"),
@@ -1440,6 +1713,55 @@ impl App {
             Line::from("Quit: q or Ctrl-C"),
         ];
         f.render_widget(Paragraph::new(lines).block(block), area);
+    }
+}
+
+/// The centred, size-capped window rectangle (never the full terminal).
+fn window_area(area: Rect) -> Rect {
+    let w = area.width.min(MAX_WIDTH);
+    let h = area.height.min(MAX_HEIGHT);
+    let x = area.x + (area.width.saturating_sub(w)) / 2;
+    let y = area.y + (area.height.saturating_sub(h)) / 2;
+    Rect {
+        x,
+        y,
+        width: w,
+        height: h,
+    }
+}
+
+/// Build a result line: `name` with matched characters highlighted, followed
+/// by a styled `suffix`.
+fn highlight_line(name: &str, matches: &[usize], suffix: String, suffix_style: Style) -> Line<'static> {
+    let mut spans = Vec::new();
+    for (i, ch) in name.chars().enumerate() {
+        let style = if matches.contains(&i) {
+            Style::default().fg(ACCENT).add_modifier(Modifier::BOLD)
+        } else {
+            Style::default()
+        };
+        spans.push(Span::styled(ch.to_string(), style));
+    }
+    if !suffix.is_empty() {
+        spans.push(Span::styled(suffix, suffix_style));
+    }
+    Line::from(spans)
+}
+
+/// A bold heading line for the preview pane.
+fn heading(text: &str) -> Line<'static> {
+    Line::from(Span::styled(
+        text.to_string(),
+        Style::default().fg(ACCENT).add_modifier(Modifier::BOLD),
+    ))
+}
+
+/// Hint shown when a picker has no items at all.
+fn empty_hint(focus: Focus) -> String {
+    match focus {
+        Focus::Projects => "No projects yet — press n to create one".to_string(),
+        Focus::Envs => "No environments — press n to create one".to_string(),
+        Focus::Secrets => "No secrets — press n to add one".to_string(),
     }
 }
 

@@ -201,16 +201,23 @@ devsecrets export .env          # knows this is the "api" project
 
 ## The TUI
 
-Run `devsecrets` with no arguments. You get three panes — **Projects →
-Environments → Secrets** — and navigate left-to-right as you drill in.
+Run `devsecrets` with no arguments. The interface is
+[Telescope](https://github.com/nvim-telescope/telescope.nvim)-style: a
+centered, bounded floating window (it never fills the whole terminal) showing
+one picker at a time as you drill through **Projects → Environments →
+Secrets**. Each picker has a fuzzy-filter prompt, a results list with match
+highlighting, and a live preview pane.
+
+Press `/` to fuzzy-filter the current list; type to narrow, `Esc` to clear.
+`Enter` opens the highlighted item (drilling a level, or editing a secret).
 
 | Key             | Action                                              |
 |-----------------|-----------------------------------------------------|
-| `↑`/`k` `↓`/`j` | Move selection                                      |
+| `/`             | Fuzzy-filter the current list                       |
+| `↑`/`k` `↓`/`j` | Move selection (`Ctrl-n`/`Ctrl-p` while searching)  |
 | `→`/`l` `Enter` | Drill in (Projects → Envs → Secrets)                |
-| `←`/`h`         | Go back                                             |
-| `Tab`           | Cycle focus between panes                           |
-| `n`             | New project / env / secret (based on focused pane)  |
+| `←`/`h` `Esc`   | Go back a level                                     |
+| `n`             | New project / env / secret (based on current level) |
 | `e`             | Edit secret (on Secrets) / whole env inline (else)  |
 | `a`             | Edit the whole environment inline (multi-line)      |
 | `E`             | Edit the whole environment in `$EDITOR` (as `.env`) |
@@ -228,7 +235,9 @@ Environments → Secrets** — and navigate left-to-right as you drill in.
 
 New secrets are entered through a two-field form (**Key** and **Value** as
 separate boxes, `Tab` to switch) so a value can be pasted on its own. Values
-are masked by default — press `s` to reveal them.
+are masked by default — press `s` to reveal them. The preview pane shows the
+selected item's details, including a secret's resolved value when it contains
+`${...}` references.
 
 ### Copy to clipboard
 
