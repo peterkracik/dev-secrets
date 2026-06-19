@@ -33,11 +33,29 @@ impl Default for Settings {
     }
 }
 
-/// `~/.config/devsecrets` (falls back to `./.devsecrets` if no config dir).
+/// Where all config lives. We deliberately use `~/.config/devsecrets` on every
+/// Unix (including macOS, where `dirs::config_dir()` would otherwise return
+/// `~/Library/Application Support`). `$XDG_CONFIG_HOME` is honoured if set; on
+/// Windows we use the standard config dir.
 pub fn config_dir() -> PathBuf {
-    dirs::config_dir()
-        .map(|d| d.join(APP_DIR))
-        .unwrap_or_else(|| PathBuf::from(".devsecrets"))
+    if let Some(xdg) = std::env::var_os("XDG_CONFIG_HOME") {
+        if !xdg.is_empty() {
+            return PathBuf::from(xdg).join(APP_DIR);
+        }
+    }
+    #[cfg(windows)]
+    {
+        return dirs::config_dir()
+            .map(|d| d.join(APP_DIR))
+            .unwrap_or_else(|| PathBuf::from(".devsecrets"));
+    }
+    #[cfg(not(windows))]
+    {
+        if let Some(home) = dirs::home_dir() {
+            return home.join(".config").join(APP_DIR);
+        }
+        PathBuf::from(".devsecrets")
+    }
 }
 
 pub fn settings_file() -> PathBuf {

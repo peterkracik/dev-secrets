@@ -155,14 +155,13 @@ Everything lives under `~/.config/devsecrets/`:
 
 The config directory is platform-specific:
 
-| OS      | Default location                                      |
-|---------|-------------------------------------------------------|
-| Linux   | `~/.config/devsecrets/`                               |
-| macOS   | `~/Library/Application Support/devsecrets/`           |
-| Windows | `%APPDATA%\devsecrets\`                               |
+| OS            | Default location          |
+|---------------|---------------------------|
+| Linux / macOS | `~/.config/devsecrets/`   |
+| Windows       | `%APPDATA%\devsecrets\`   |
 
-On Linux/macOS you can override the base directory with the standard
-`XDG_CONFIG_HOME` environment variable.
+You can override the base directory with the standard `XDG_CONFIG_HOME`
+environment variable (Unix).
 
 ### `devsecrets setup` — assign a folder
 
