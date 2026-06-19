@@ -10,11 +10,11 @@
 # binary from the GitHub Releases page instead.
 class Devsecrets < Formula
   desc "Telescope-style TUI and CLI for managing local development secrets"
-  homepage "https://github.com/peterkracik/localenvs"
+  homepage "https://github.com/peterkracik/dev-secrets"
   version "0.1.0"
-  url "https://github.com/peterkracik/localenvs.git", tag: "v#{version}"
+  url "https://github.com/peterkracik/dev-secrets.git", tag: "v#{version}"
   license "MIT"
-  head "https://github.com/peterkracik/localenvs.git", branch: "main"
+  head "https://github.com/peterkracik/dev-secrets.git", branch: "main"
 
   depends_on "rust" => :build
 

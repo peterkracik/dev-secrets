@@ -82,16 +82,16 @@ Upgrade later with `brew upgrade devsecrets`.
 ### Download a prebuilt binary
 
 Grab the archive for your platform from the
-[**Releases**](https://github.com/peterkracik/localenvs/releases) page (built
+[**Releases**](https://github.com/peterkracik/dev-secrets/releases) page (built
 automatically by CI), or pull the latest release from the command line:
 
 ```sh
 # Linux (x86_64)
-curl -L https://github.com/peterkracik/localenvs/releases/latest/download/devsecrets-x86_64-unknown-linux-gnu.tar.gz | tar xz
+curl -L https://github.com/peterkracik/dev-secrets/releases/latest/download/devsecrets-x86_64-unknown-linux-gnu.tar.gz | tar xz
 sudo install devsecrets-x86_64-unknown-linux-gnu/devsecrets /usr/local/bin/
 
 # macOS (Apple Silicon)
-curl -L https://github.com/peterkracik/localenvs/releases/latest/download/devsecrets-aarch64-apple-darwin.tar.gz | tar xz
+curl -L https://github.com/peterkracik/dev-secrets/releases/latest/download/devsecrets-aarch64-apple-darwin.tar.gz | tar xz
 sudo install devsecrets-aarch64-apple-darwin/devsecrets /usr/local/bin/
 ```
 
@@ -104,9 +104,9 @@ Requires [Rust](https://rustup.rs/) **1.74+** (the only build dependency — no
 system libraries needed).
 
 ```sh
-cargo install --git https://github.com/peterkracik/localenvs.git
+cargo install --git https://github.com/peterkracik/dev-secrets.git
 # or, from a clone:
-git clone https://github.com/peterkracik/localenvs.git && cd localenvs
+git clone https://github.com/peterkracik/dev-secrets.git && cd dev-secrets
 cargo install --path .
 ```
 
