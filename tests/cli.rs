@@ -266,14 +266,15 @@ fn list_falls_back_to_folder_assignment() {
     let canonical = std::fs::canonicalize(&folder).unwrap();
     let canonical = canonical.to_str().unwrap();
 
-    // Write the assignment directly (setup's wizard needs a TTY).
+    // Write the assignment directly (setup's wizard needs a TTY). Build the
+    // JSON with serde so the path is escaped correctly on every platform
+    // (Windows paths contain backslashes that would break a raw string).
     let cfg = sb.dir.join("devsecrets");
     std::fs::create_dir_all(&cfg).unwrap();
-    std::fs::write(
-        cfg.join("meta.json"),
-        format!("{{\"assignments\":{{\"{canonical}\":{{\"project\":\"api\",\"env\":\"dev\"}}}}}}"),
-    )
-    .unwrap();
+    let meta = serde_json::json!({
+        "assignments": { canonical: { "project": "api", "env": "dev" } }
+    });
+    std::fs::write(cfg.join("meta.json"), serde_json::to_string(&meta).unwrap()).unwrap();
 
     // `secret list` with no -p/-e uses the folder's assignment.
     let list = sb.ok_in(&folder, &["secret", "list"]);

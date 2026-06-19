@@ -483,17 +483,11 @@ fn resolve_target(project: Option<String>, env: Option<String>) -> Result<(Strin
 /// Resolve a project from an explicit arg, falling back to the current
 /// folder's assignment. Used by listings that only need a project.
 fn resolve_project(project: Option<String>) -> Result<String> {
-    project
-        .or_else(|| {
-            meta::current_dir()
-                .ok()
-                .and_then(|dir| meta::load().ok().and_then(|m| m.get(&dir).cloned()))
-                .map(|a| a.project)
-        })
-        .context(
-            "no project given and this folder isn't assigned \
+    let assignment = meta::load()?.get(&meta::current_dir()?).cloned();
+    project.or_else(|| assignment.map(|a| a.project)).context(
+        "no project given and this folder isn't assigned \
              (run `devsecrets setup` here, or pass --project)",
-        )
+    )
 }
 
 fn export(
