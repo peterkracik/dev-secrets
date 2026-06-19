@@ -1,134 +1,365 @@
-# dev-secrets
+<h1 align="center">dev-secrets</h1>
 
-A small **k9s-style TUI + CLI** for managing *local development* secrets,
-organized by **project** and **environment** instead of scattered `.env`
-files per folder.
+<p align="center">
+  A fast, <a href="https://k9scli.io/">k9s</a>-style terminal UI (and full CLI) for managing
+  your <strong>local development</strong> secrets — organized by <strong>project</strong> and
+  <strong>environment</strong> instead of scattered <code>.env</code> files.
+</p>
 
-> ⚠️ Not for real secrets. The store is plain JSON on disk and **not
-> encrypted**. It is meant for local/test values only.
+<p align="center">
+  <code>devsecrets</code> &nbsp;·&nbsp; written in Rust &nbsp;·&nbsp; TUI + scriptable CLI
+</p>
 
-## Why
+---
 
-Instead of copying `.env` files around and keeping them in sync per folder,
-you keep everything in one place, grouped by project. When you start working
-you just run:
+## What is this?
 
-```sh
-devsecrets export .env
-```
+If you work on several projects, each with a few environments (`dev`,
+`staging`, `prod`, a teammate's setup, …), you usually end up with a mess of
+`.env` files copied between folders and slowly drifting out of sync.
 
-…and the right environment is written out.
-
-## Concepts
+**dev-secrets** keeps all of those values in **one place**, grouped logically:
 
 ```
 Project              e.g. "api"
-└── Environment      e.g. "dev", "staging", "prod"  (a.k.a. instance)
+└── Environment      e.g. "dev", "staging", "prod"   (an "instance")
     └── Secrets      KEY = VALUE pairs
 ```
 
-- A project can have a **default environment** (used by `export` when you
-  don't pass `--env`).
-- A project can be **linked to a folder**, so running `devsecrets export`
-  *inside that folder* auto-selects the project.
-- Values can **reference** other secrets with `${project.env.KEY}` so you
-  don't have to duplicate shared values. References are resolved on export
-  (use `--raw` to keep them literal).
-
-## Install
+When you sit down to work, you export the right set on demand:
 
 ```sh
+devsecrets export .env          # writes the default environment to ./.env
+```
+
+Everything you can do in the interactive TUI you can also do from the CLI, so
+it fits into scripts and Makefiles just as well as interactive use.
+
+> [!WARNING]
+> **This is not a secrets manager for production credentials.**
+> The store is plain, human-readable JSON on your disk and is **not
+> encrypted**. It is designed for *local, non-sensitive, test* values only
+> (think `localhost` URLs, dummy API keys, dev ports). Do not put real
+> production secrets in here.
+
+---
+
+## Features
+
+- 🗂️ **Organized by project → environment → secret**, not by folder.
+- 🖥️ **k9s-style TUI** — three master/detail panes, single-key actions, live editing.
+- ⌨️ **Full CLI parity** — every action is scriptable.
+- 📥 **Import** existing `.env` files (merge or replace).
+- 📤 **Export** any environment to a file or stdout.
+- 🔗 **References**: write `${project.env.KEY}` to reuse a value instead of
+  duplicating it. Resolved (recursively, with cycle detection) on export.
+- 📌 **Default environment** per project + **folder linking** so `devsecrets
+  export` "just knows" which project you mean inside a project directory.
+- 📝 **Plain JSON store** you can read, diff, and back up yourself.
+
+---
+
+## Installation
+
+dev-secrets is a single self-contained binary called `devsecrets`.
+
+### Requirements
+
+- [Rust](https://rustup.rs/) **1.74 or newer** (stable). That's the only
+  build dependency — no system libraries required.
+
+### Option 1 — install from source with Cargo (recommended)
+
+```sh
+git clone https://github.com/peterkracik/localenvs.git
+cd localenvs
 cargo install --path .
-# or
-cargo build --release   # binary at target/release/devsecrets
 ```
 
-## First run
+This builds an optimized binary and places `devsecrets` in
+`~/.cargo/bin` (make sure that directory is on your `PATH`).
+
+### Option 2 — install directly from Git
 
 ```sh
-devsecrets setup                 # store at ~/.config/dev-secrets/store.json
-devsecrets setup ~/my-secrets    # …or keep the store in a folder you choose
+cargo install --git https://github.com/peterkracik/localenvs.git
 ```
 
-If you skip `setup`, the default location is used automatically.
-
-## TUI
-
-Just run `devsecrets` with no arguments. Three panes — Projects →
-Environments → Secrets — like k9s.
-
-| Key            | Action                                             |
-|----------------|----------------------------------------------------|
-| `↑/k` `↓/j`    | move selection                                     |
-| `→/l` `Enter`  | drill in (Projects → Envs → Secrets)               |
-| `←/h` `Tab`    | go back / cycle panes                              |
-| `n`            | new project / env / secret (depends on focus)      |
-| `e` / `Enter`  | edit secret value                                  |
-| `d`            | delete focused item (with confirmation)            |
-| `y`            | duplicate environment                              |
-| `i`            | import a `.env` file into the selected env          |
-| `x`            | export the selected env to a `.env` file            |
-| `D`            | set selected env as the project default            |
-| `f`            | assign a working folder to the project             |
-| `s`            | toggle showing / hiding values                     |
-| `?`            | help                                               |
-| `q` / `Ctrl-C` | quit                                               |
-
-## CLI
-
-Everything in the TUI is scriptable:
+### Option 3 — build a release binary manually
 
 ```sh
-# Projects
-devsecrets project create api --folder .
-devsecrets project list
-devsecrets project set-folder api ~/code/api
-devsecrets project delete api
+git clone https://github.com/peterkracik/localenvs.git
+cd localenvs
+cargo build --release
+# binary is at ./target/release/devsecrets — copy it anywhere on your PATH:
+sudo cp target/release/devsecrets /usr/local/bin/
+```
 
-# Environments
+### Verify
+
+```sh
+devsecrets --version
+devsecrets --help
+```
+
+---
+
+## Quick start
+
+```sh
+# 1. (Optional) choose where the store lives. Skip to use the default.
+devsecrets setup
+
+# 2. Create a project and an environment
+devsecrets project create api
 devsecrets env create -p api dev
-devsecrets env list -p api
-devsecrets env set-default -p api dev
-devsecrets env delete -p api dev
 
-# Secrets
+# 3. Add some secrets
 devsecrets secret set -p api -e dev DB_HOST localhost
-devsecrets secret set -p api -e dev API_URL 'http://${api.dev.DB_HOST}:5432'
-devsecrets secret get -p api -e dev API_URL          # resolved
-devsecrets secret get -p api -e dev API_URL --raw    # literal
-devsecrets secret list -p api -e dev --show
-devsecrets secret delete -p api -e dev DB_HOST
+devsecrets secret set -p api -e dev DB_PORT 5432
 
-# Import / export
-devsecrets import existing.env -p api -e dev          # merge (use --replace to overwrite)
-devsecrets export .env -p api -e dev                  # to file
-devsecrets export -p api                              # default env -> stdout
-devsecrets export                                     # project inferred from current folder
+# 4. Export them when you need them
+devsecrets export .env -p api -e dev
+```
 
-# Duplicate an environment
+…or just run the TUI and do all of the above interactively:
+
+```sh
+devsecrets
+```
+
+---
+
+## Configuration
+
+### Where data is stored
+
+dev-secrets keeps two files under your OS config directory:
+
+| File          | Purpose                                            |
+|---------------|----------------------------------------------------|
+| `config.json` | Small pointer file — remembers where the store is. |
+| `store.json`  | The actual data (projects, environments, secrets). |
+
+The default config directory is platform-specific:
+
+| OS      | Default location                                      |
+|---------|-------------------------------------------------------|
+| Linux   | `~/.config/dev-secrets/`                              |
+| macOS   | `~/Library/Application Support/dev-secrets/`          |
+| Windows | `%APPDATA%\dev-secrets\`                              |
+
+On Linux/macOS you can override the base directory with the standard
+`XDG_CONFIG_HOME` environment variable.
+
+### `devsecrets setup`
+
+Run `setup` once to initialize the app and, optionally, to keep the store
+somewhere other than the default:
+
+```sh
+devsecrets setup                      # use the default location
+devsecrets setup ~/Dropbox/devsecrets # keep store.json in a folder you choose
+devsecrets setup ~/secrets/store.json # or point at an exact file path
+```
+
+- Pass a **directory** → the store is created as `store.json` inside it.
+- Pass a **`.json` file path** → that exact file is used.
+
+Putting the store in a synced folder (Dropbox, iCloud, a private Git repo,
+etc.) is an easy way to share dev values across your own machines. (Remember:
+unencrypted — local test values only.)
+
+If you never run `setup`, dev-secrets just uses the default location
+automatically the first time you run it.
+
+### Linking a project to a folder
+
+Associate a project with a working directory so `devsecrets export` (with no
+`--project`) auto-selects it when run from there:
+
+```sh
+devsecrets project create api --folder ~/code/api
+# or for an existing project:
+devsecrets project set-folder api ~/code/api
+
+cd ~/code/api
+devsecrets export .env          # knows this is the "api" project
+```
+
+---
+
+## The TUI
+
+Run `devsecrets` with no arguments. You get three panes — **Projects →
+Environments → Secrets** — and navigate left-to-right as you drill in.
+
+| Key             | Action                                              |
+|-----------------|-----------------------------------------------------|
+| `↑`/`k` `↓`/`j` | Move selection                                      |
+| `→`/`l` `Enter` | Drill in (Projects → Envs → Secrets)                |
+| `←`/`h`         | Go back                                             |
+| `Tab`           | Cycle focus between panes                           |
+| `n`             | New project / env / secret (based on focused pane)  |
+| `e` / `Enter`   | Edit the selected secret's value                    |
+| `d`             | Delete the focused item (asks for confirmation)     |
+| `y`             | Duplicate the selected environment                  |
+| `i`             | Import a `.env` file into the selected environment  |
+| `x`             | Export the selected environment to a `.env` file    |
+| `D`             | Set the selected environment as the project default |
+| `f`             | Assign a working folder to the project              |
+| `s`             | Toggle showing / hiding secret values               |
+| `?`             | Help overlay                                        |
+| `q` / `Ctrl-C`  | Quit                                                |
+
+New secrets are entered as `KEY=VALUE`. Values are masked by default — press
+`s` to reveal them.
+
+---
+
+## CLI reference
+
+Everything below also works interactively in the TUI.
+
+### Projects
+
+```sh
+devsecrets project create <name> [--folder <dir>]
+devsecrets project list
+devsecrets project set-folder <name> [<dir>]   # omit <dir> to use current dir
+devsecrets project delete <name>
+```
+
+### Environments
+
+```sh
+devsecrets env create -p <project> <name>
+devsecrets env list -p <project>
+devsecrets env set-default -p <project> <name>
+devsecrets env delete -p <project> <name>
+```
+
+### Secrets
+
+```sh
+devsecrets secret set    -p <project> -e <env> <KEY> <VALUE>
+devsecrets secret get    -p <project> -e <env> <KEY> [--raw]
+devsecrets secret list   -p <project> -e <env> [--show]
+devsecrets secret delete -p <project> -e <env> <KEY>
+```
+
+By default `get` resolves references and `list` masks values; use `--raw` /
+`--show` respectively to see literal values.
+
+### Import & export
+
+```sh
+# Import a .env file (merges by default; --replace overwrites the env first)
+devsecrets import existing.env -p api -e dev
+devsecrets import existing.env -p api -e dev --replace
+
+# Export to a file
+devsecrets export .env -p api -e dev
+
+# Export the project's default environment to stdout
+devsecrets export -p api
+
+# Export, inferring the project from the current folder
+devsecrets export
+
+# Export raw values (do not resolve ${...} references)
+devsecrets export .env -p api --raw
+```
+
+### Duplicate an environment
+
+```sh
 devsecrets duplicate -p api dev staging
+```
 
-# Overview
+### Overview
+
+```sh
 devsecrets list
 ```
 
-## References
+---
 
-A value like:
+## References: share values without duplicating
 
+A value may contain one or more references of the form
+`${project.env.KEY}`. They point at any secret in the store, so a shared
+value lives in exactly one place:
+
+```sh
+devsecrets secret set -p shared -e common DB_HOST db.local
+devsecrets secret set -p api    -e dev    API_URL 'http://${shared.common.DB_HOST}:5432'
+
+devsecrets secret get -p api -e dev API_URL
+# → http://db.local:5432
 ```
-API_URL=http://${shared.common.DB_HOST}:5432
+
+- References are resolved at **export** time (and by `secret get`).
+- They can be **nested** (a referenced value may contain more references).
+- **Cycles** and **missing targets** are detected and reported as errors.
+- Use `--raw` on `export` / `get` to keep references literal.
+
+---
+
+## How the store looks on disk
+
+It's just JSON — readable, diffable, and easy to back up:
+
+```json
+{
+  "projects": {
+    "api": {
+      "default_env": "dev",
+      "folder": "/home/you/code/api",
+      "environments": {
+        "dev": {
+          "values": {
+            "DB_HOST": "localhost",
+            "DB_PORT": "5432"
+          }
+        }
+      }
+    }
+  }
+}
 ```
 
-resolves `${shared.common.DB_HOST}` from the `shared` project's `common`
-environment at export time. References can be nested; cycles are detected
-and reported.
+---
 
-## Storage
+## FAQ
 
-- App config: `~/.config/dev-secrets/config.json` (points at the store).
-- Data store: `~/.config/dev-secrets/store.json` by default, or wherever
-  `setup` put it. Plain, human-readable JSON.
+**Is it safe to commit my store to Git?**
+Only if it truly contains non-sensitive test values, and ideally in a private
+repo. The file is not encrypted, so treat it like any other plaintext config.
+
+**Can I edit `store.json` by hand?**
+Yes. Keep it valid JSON; key order is preserved on save so diffs stay clean.
+
+**Does it support comments / `export FOO=bar` in `.env` files?**
+On import, yes — blank lines, `#` comments, an optional `export ` prefix, and
+single/double quoted values are all understood.
+
+**What happens if I run a command before `setup`?**
+dev-secrets initializes the default location automatically, so `setup` is
+only needed if you want a custom store location.
+
+---
+
+## Development
+
+```sh
+cargo build         # debug build
+cargo test          # run unit tests
+cargo clippy        # lints
+cargo fmt           # format
+```
+
+Contributions and issues are welcome.
 
 ## License
 
