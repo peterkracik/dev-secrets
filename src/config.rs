@@ -2,7 +2,7 @@
 //!
 //! Everything lives under the user's config dir, `~/.config/devsecrets`:
 //!
-//! - `settings.json` — points at where the secrets store file lives. By
+//! - `settings.toml` — points at where the secrets store file lives. By
 //!   default that is `store.json` in the same directory, but it can be moved
 //!   anywhere (e.g. a synced folder) via `devsecrets settings store <path>`.
 //! - `meta.json`     — folder → (project, environment) assignments (see
@@ -16,7 +16,9 @@ use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 
 const APP_DIR: &str = "devsecrets";
-const SETTINGS_FILE: &str = "settings.json";
+const SETTINGS_FILE: &str = "settings.toml";
+/// Pre-0.1 settings file; auto-migrated to `settings.toml` on first load.
+const LEGACY_SETTINGS_FILE: &str = "settings.json";
 const DEFAULT_STORE_FILE: &str = "store.json";
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -62,34 +64,51 @@ pub fn settings_file() -> PathBuf {
     config_dir().join(SETTINGS_FILE)
 }
 
+fn legacy_settings_file() -> PathBuf {
+    config_dir().join(LEGACY_SETTINGS_FILE)
+}
+
 pub fn default_store_path() -> PathBuf {
     config_dir().join(DEFAULT_STORE_FILE)
 }
 
-/// Whether the app has been initialised (settings file exists).
+/// Whether the app has been initialised (a settings file exists).
 pub fn is_initialised() -> bool {
-    settings_file().exists()
+    settings_file().exists() || legacy_settings_file().exists()
 }
 
-/// Load settings, falling back to defaults when they do not exist yet.
+/// Load settings, falling back to defaults when they do not exist yet. An old
+/// JSON settings file is read and migrated to TOML transparently.
 pub fn load() -> Result<Settings> {
     let path = settings_file();
-    if !path.exists() {
-        return Ok(Settings::default());
+    if path.exists() {
+        let data = fs::read_to_string(&path)
+            .with_context(|| format!("reading settings {}", path.display()))?;
+        return toml::from_str(&data)
+            .with_context(|| format!("parsing settings {}", path.display()));
     }
-    let data = fs::read_to_string(&path)
-        .with_context(|| format!("reading settings {}", path.display()))?;
-    let settings: Settings = serde_json::from_str(&data)
-        .with_context(|| format!("parsing settings {}", path.display()))?;
-    Ok(settings)
+
+    // Migrate a legacy JSON settings file if present.
+    let legacy = legacy_settings_file();
+    if legacy.exists() {
+        let data = fs::read_to_string(&legacy)
+            .with_context(|| format!("reading settings {}", legacy.display()))?;
+        let settings: Settings = serde_json::from_str(&data)
+            .with_context(|| format!("parsing settings {}", legacy.display()))?;
+        save(&settings)?;
+        let _ = fs::remove_file(&legacy);
+        return Ok(settings);
+    }
+
+    Ok(Settings::default())
 }
 
-/// Persist settings, creating the config directory if needed.
+/// Persist settings as TOML, creating the config directory if needed.
 pub fn save(settings: &Settings) -> Result<()> {
     let dir = config_dir();
     fs::create_dir_all(&dir).with_context(|| format!("creating config dir {}", dir.display()))?;
     let path = settings_file();
-    let data = serde_json::to_string_pretty(settings)?;
+    let data = toml::to_string_pretty(settings)?;
     fs::write(&path, data).with_context(|| format!("writing settings {}", path.display()))?;
     Ok(())
 }

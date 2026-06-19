@@ -149,7 +149,7 @@ Everything lives under `~/.config/devsecrets/`:
 
 | File            | Purpose                                                   |
 |-----------------|-----------------------------------------------------------|
-| `settings.json` | Points at where the secrets store file lives.             |
+| `settings.toml` | Points at where the secrets store file lives.             |
 | `meta.json`     | Folder → (project, environment) assignments (see below).  |
 | `store.json`    | The secrets themselves (default location).                |
 
