@@ -451,11 +451,12 @@ secrets. Use `↑`/`↓`/`Tab` to choose and `Enter` to insert the right form
 (`${SECRET}` / `${env.SECRET}` / `${project.env.SECRET}` depending on where it
 lives); `Esc` dismisses the popup.
 
-**Display & jump:** references aren't secret, so the TUI shows them in clear
-as `$ref:project.env.key` (e.g. `AUTH = $ref:shared.TOKEN`, with a coloured
-`$ref:` prefix) instead of masking them, while ordinary values stay masked
-until you press `s`. Press `g` on a referencing secret to jump straight to the
-secret it points at.
+**Display & jump:** while values are hidden, references show as
+`$ref:project.env.key` (e.g. `AUTH = $ref:shared.TOKEN`, with a coloured
+`$ref:` prefix) and ordinary values are masked. Press `s` to reveal: ordinary
+values appear and **references resolve to their actual value** (in the secrets
+list and the environment preview). Press `g` on a referencing secret to jump
+straight to the secret it points at.
 
 ---
 

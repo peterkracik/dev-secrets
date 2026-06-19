@@ -2120,10 +2120,34 @@ impl App {
         f.render_stateful_widget(list, area, &mut state);
     }
 
+    /// Spans for a secret value as shown in lists/previews. When hidden,
+    /// references display as `$ref:…` and other values are masked. When
+    /// revealed (`s`), references resolve to their actual value.
+    fn shown_value_spans(
+        &self,
+        project: &str,
+        env: &str,
+        key: &str,
+        raw: &str,
+    ) -> Vec<Span<'static>> {
+        if self.reveal && is_reference(raw) {
+            return match resolve::resolve_at(&self.handle.store, project, env, key) {
+                Ok(v) => vec![Span::styled(v, Style::default().fg(Color::Green))],
+                Err(e) => vec![Span::styled(
+                    format!("<{e}>"),
+                    Style::default().fg(Color::Red),
+                )],
+            };
+        }
+        value_spans(raw, self.reveal)
+    }
+
     /// The secrets list for the current environment, fuzzy-filtered.
     fn draw_secrets(&self, f: &mut Frame, area: Rect) {
         let labels = self.secret_labels();
         let filtered = self.filtered_indices();
+        let project = self.current_project_name().unwrap_or_default();
+        let env = self.current_env_name().unwrap_or_default();
 
         let mut items: Vec<ListItem> = Vec::with_capacity(filtered.len());
         let mut selected_row = 0;
@@ -2142,7 +2166,7 @@ impl App {
                 .unwrap_or_default();
             let mut spans = name_spans(name, &matches, Style::default());
             spans.push(Span::styled("  = ", Style::default().fg(Color::DarkGray)));
-            spans.extend(value_spans(&v, self.reveal));
+            spans.extend(self.shown_value_spans(&project, &env, name, &v));
             items.push(ListItem::new(Line::from(spans)));
         }
 
@@ -2260,17 +2284,23 @@ impl App {
                 Style::default().fg(Color::DarkGray),
             ))];
         };
-        let name = self.current_env_name().unwrap_or_default();
-        let mut lines = vec![heading(&name), Line::from("")];
-        for (k, v) in &e.values {
+        let env = self.current_env_name().unwrap_or_default();
+        let project = self.current_project_name().unwrap_or_default();
+        let entries: Vec<(String, String)> = e
+            .values
+            .iter()
+            .map(|(k, v)| (k.clone(), v.clone()))
+            .collect();
+        let mut lines = vec![heading(&env), Line::from("")];
+        for (k, v) in &entries {
             let mut spans = vec![
                 Span::styled(k.clone(), Style::default().fg(Color::Yellow)),
                 Span::raw(" = "),
             ];
-            spans.extend(value_spans(v, self.reveal));
+            spans.extend(self.shown_value_spans(&project, &env, k, v));
             lines.push(Line::from(spans));
         }
-        if e.values.is_empty() {
+        if entries.is_empty() {
             lines.push(Line::from(Span::styled(
                 "(empty — press n to add a secret)",
                 Style::default().fg(Color::DarkGray),
