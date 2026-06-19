@@ -367,22 +367,37 @@ devsecrets list
 
 ## References: share values without duplicating
 
-A value may contain one or more references of the form
-`${project.env.KEY}`. They point at any secret in the store, so a shared
-value lives in exactly one place:
+A value may reference another secret so a shared value lives in exactly one
+place. There are three forms, depending on how much context you need to
+repeat — they resolve **relative to where the value lives**:
+
+| Form                       | Resolves to                                   |
+|----------------------------|-----------------------------------------------|
+| `${SECRET}`                | same project, **same environment**            |
+| `${env.SECRET}`            | same project, **another environment**         |
+| `${project.env.SECRET}`    | **anywhere** in the store                     |
 
 ```sh
-devsecrets secret set -p shared -e common DB_HOST db.local
-devsecrets secret set -p api    -e dev    API_URL 'http://${shared.common.DB_HOST}:5432'
+devsecrets secret set -p api -e dev  DB_HOST localhost
+devsecrets secret set -p api -e dev  URL  'http://${DB_HOST}:5432'        # same env
+devsecrets secret set -p api -e prod URL  'https://${dev.DB_HOST}/api'    # other env
+devsecrets secret set -p api -e dev  DSN  '${infra.prod.DATABASE_URL}'    # cross-project
 
-devsecrets secret get -p api -e dev API_URL
-# → http://db.local:5432
+devsecrets secret get -p api -e dev URL
+# → http://localhost:5432
 ```
 
 - References are resolved at **export** time (and by `secret get`).
-- They can be **nested** (a referenced value may contain more references).
+- They can be **nested** (a referenced value may contain more references),
+  and each level resolves relative to *its own* project/env.
 - **Cycles** and **missing targets** are detected and reported as errors.
 - Use `--raw` on `export` / `get` to keep references literal.
+
+**Autocomplete:** in the TUI, while editing a secret value (or the value field
+of a new secret), type `${` to pop up a fuzzy-filterable list of available
+secrets. Use `↑`/`↓`/`Tab` to choose and `Enter` to insert the right form
+(`${SECRET}` / `${env.SECRET}` / `${project.env.SECRET}` depending on where it
+lives); `Esc` dismisses the popup.
 
 ---
 

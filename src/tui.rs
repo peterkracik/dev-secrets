@@ -214,6 +214,10 @@ pub struct App {
     secret_idx: usize,
     reveal: bool,
     show_help: bool,
+    /// Selected row in the reference-autocomplete popup.
+    ac_sel: usize,
+    /// True when the user dismissed the autocomplete popup with Esc.
+    ac_dismissed: bool,
     /// Current fuzzy filter for the active picker.
     query: String,
     /// Whether keystrokes are being typed into the filter prompt.
@@ -258,6 +262,8 @@ impl App {
             secret_idx: 0,
             reveal: false,
             show_help: false,
+            ac_sel: 0,
+            ac_dismissed: false,
             query: String::new(),
             searching: false,
             status: "Welcome to dev-secrets. Press / to search, ? for help.".to_string(),
@@ -626,6 +632,7 @@ impl App {
                     self.status = "Create an environment first.".into();
                     return;
                 }
+                self.ac_reset();
                 self.kv_input = Some(KvInputState {
                     key: String::new(),
                     value: String::new(),
@@ -744,6 +751,7 @@ impl App {
             .and_then(|e| e.values.get(&key))
             .cloned()
             .unwrap_or_default();
+        self.ac_reset();
         self.input = Some(InputState {
             title: format!("Edit {key}"),
             prompt: "Value:".into(),
@@ -878,6 +886,30 @@ impl App {
     // --- input modal -------------------------------------------------------
 
     fn on_input_key(&mut self, key: KeyEvent) -> Result<()> {
+        // Reference autocomplete takes priority when the popup is open.
+        let cands = self.autocomplete_candidates();
+        if !cands.is_empty() {
+            match key.code {
+                KeyCode::Down | KeyCode::Tab => {
+                    self.ac_sel = (self.ac_sel + 1) % cands.len();
+                    return Ok(());
+                }
+                KeyCode::Up => {
+                    self.ac_sel = (self.ac_sel + cands.len() - 1) % cands.len();
+                    return Ok(());
+                }
+                KeyCode::Enter => {
+                    self.accept_autocomplete(&cands[self.ac_sel.min(cands.len() - 1)]);
+                    return Ok(());
+                }
+                KeyCode::Esc => {
+                    self.ac_dismissed = true;
+                    return Ok(());
+                }
+                _ => {}
+            }
+        }
+
         let Some(input) = self.input.as_mut() else {
             return Ok(());
         };
@@ -891,9 +923,11 @@ impl App {
             }
             KeyCode::Backspace => {
                 input.buffer.pop();
+                self.ac_reset();
             }
             KeyCode::Char(c) => {
                 input.buffer.push(c);
+                self.ac_reset();
             }
             _ => {}
         }
@@ -901,6 +935,30 @@ impl App {
     }
 
     fn on_kv_key(&mut self, key: KeyEvent) -> Result<()> {
+        // Autocomplete only applies while editing the Value field.
+        let cands = self.autocomplete_candidates();
+        if !cands.is_empty() {
+            match key.code {
+                KeyCode::Down | KeyCode::Tab => {
+                    self.ac_sel = (self.ac_sel + 1) % cands.len();
+                    return Ok(());
+                }
+                KeyCode::Up => {
+                    self.ac_sel = (self.ac_sel + cands.len() - 1) % cands.len();
+                    return Ok(());
+                }
+                KeyCode::Enter => {
+                    self.accept_autocomplete(&cands[self.ac_sel.min(cands.len() - 1)]);
+                    return Ok(());
+                }
+                KeyCode::Esc => {
+                    self.ac_dismissed = true;
+                    return Ok(());
+                }
+                _ => {}
+            }
+        }
+
         let Some(form) = self.kv_input.as_mut() else {
             return Ok(());
         };
@@ -924,21 +982,119 @@ impl App {
                     }
                 }
             }
-            KeyCode::Backspace => match form.active {
-                KvField::Key => {
-                    form.key.pop();
-                }
-                KvField::Value => {
-                    form.value.pop();
-                }
-            },
-            KeyCode::Char(c) => match form.active {
-                KvField::Key => form.key.push(c),
-                KvField::Value => form.value.push(c),
-            },
+            KeyCode::Backspace => {
+                match form.active {
+                    KvField::Key => form.key.pop(),
+                    KvField::Value => form.value.pop(),
+                };
+                self.ac_reset();
+            }
+            KeyCode::Char(c) => {
+                match form.active {
+                    KvField::Key => form.key.push(c),
+                    KvField::Value => form.value.push(c),
+                };
+                self.ac_reset();
+            }
             _ => {}
         }
         Ok(())
+    }
+
+    // --- reference autocomplete -------------------------------------------
+
+    /// Reset the autocomplete selection/dismissal after the buffer changes.
+    fn ac_reset(&mut self) {
+        self.ac_sel = 0;
+        self.ac_dismissed = false;
+    }
+
+    /// The value buffer currently being edited and the key to exclude from
+    /// suggestions (to avoid self-references), if a value field is active.
+    fn ac_target(&self) -> Option<(String, Option<String>)> {
+        if let Some(input) = &self.input {
+            if let InputAction::EditSecret { key } = &input.action {
+                return Some((input.buffer.clone(), Some(key.clone())));
+            }
+        }
+        if let Some(form) = &self.kv_input {
+            if form.active == KvField::Value {
+                return Some((form.value.clone(), None));
+            }
+        }
+        None
+    }
+
+    /// Candidate reference strings (inner, i.e. without `${}`) for the open
+    /// `${…` token at the end of the active value buffer. Empty when there is
+    /// no open token, it was dismissed, or nothing matches.
+    fn autocomplete_candidates(&self) -> Vec<String> {
+        if self.ac_dismissed {
+            return Vec::new();
+        }
+        let Some((buffer, exclude)) = self.ac_target() else {
+            return Vec::new();
+        };
+        let Some(query) = open_ref_query(&buffer) else {
+            return Vec::new();
+        };
+        self.reference_candidates(&query, exclude.as_deref())
+    }
+
+    /// Build reference suggestions relative to the current project/env,
+    /// fuzzy-filtered by `query`, capped to a handful.
+    fn reference_candidates(&self, query: &str, exclude_key: Option<&str>) -> Vec<String> {
+        let cur_p = self.current_project_name();
+        let cur_e = self.current_env_name();
+        let mut all: Vec<String> = Vec::new();
+        for (pname, proj) in &self.handle.store.projects {
+            for (ename, env) in &proj.environments {
+                for key in env.values.keys() {
+                    let same_p = cur_p.as_deref() == Some(pname.as_str());
+                    let same_e = same_p && cur_e.as_deref() == Some(ename.as_str());
+                    if same_e && exclude_key == Some(key.as_str()) {
+                        continue; // don't suggest the secret being edited
+                    }
+                    let inner = if same_e {
+                        key.clone()
+                    } else if same_p {
+                        format!("{ename}.{key}")
+                    } else {
+                        format!("{pname}.{ename}.{key}")
+                    };
+                    all.push(inner);
+                }
+            }
+        }
+        if query.is_empty() {
+            all.truncate(8);
+            return all;
+        }
+        let mut scored: Vec<(i32, String)> = all
+            .into_iter()
+            .filter_map(|s| fuzzy::score(query, &s).map(|(sc, _)| (sc, s)))
+            .collect();
+        scored.sort_by(|a, b| b.0.cmp(&a.0).then(a.1.cmp(&b.1)));
+        scored.into_iter().map(|(_, s)| s).take(8).collect()
+    }
+
+    /// Replace the open `${…` token at the end of the active buffer with the
+    /// completed `${inner}`.
+    fn accept_autocomplete(&mut self, inner: &str) {
+        let replace = |buf: &mut String| {
+            if let Some(pos) = buf.rfind("${") {
+                buf.truncate(pos);
+                buf.push_str("${");
+                buf.push_str(inner);
+                buf.push('}');
+            }
+        };
+        if let Some(input) = self.input.as_mut() {
+            replace(&mut input.buffer);
+        } else if let Some(form) = self.kv_input.as_mut() {
+            replace(&mut form.value);
+        }
+        self.ac_reset();
     }
 
     fn submit_kv(&mut self, form: KvInputState) {
@@ -1806,14 +1962,41 @@ impl App {
         f.render_widget(Paragraph::new(line), inner);
     }
 
+    /// Suggestion lines for the autocomplete popup (empty when not active).
+    fn ac_lines(&self, cands: &[String]) -> Vec<Line<'static>> {
+        if cands.is_empty() {
+            return Vec::new();
+        }
+        let sel = self.ac_sel.min(cands.len() - 1);
+        let mut lines = vec![Line::from(Span::styled(
+            "references — ↑/↓/Tab, Enter to insert, Esc to dismiss:",
+            Style::default().fg(Color::DarkGray),
+        ))];
+        for (i, c) in cands.iter().enumerate() {
+            let style = if i == sel {
+                Style::default()
+                    .fg(Color::Black)
+                    .bg(ACCENT)
+                    .add_modifier(Modifier::BOLD)
+            } else {
+                Style::default().fg(ACCENT)
+            };
+            lines.push(Line::from(Span::styled(format!("  ${{{c}}}"), style)));
+        }
+        lines
+    }
+
     fn draw_input(&self, f: &mut Frame, input: &InputState) {
-        let area = centered_rect(60, 7, f.area());
+        let cands = self.autocomplete_candidates();
+        let ac = self.ac_lines(&cands);
+        let height = 3 + ac.len() as u16 + 2;
+        let area = centered_rect(60, height, f.area());
         f.render_widget(Clear, area);
         let block = Block::default()
             .borders(Borders::ALL)
             .border_style(Style::default().fg(Color::Cyan))
             .title(format!(" {} ", input.title));
-        let inner = Paragraph::new(vec![
+        let mut lines = vec![
             Line::from(Span::styled(
                 &input.prompt,
                 Style::default().fg(Color::Gray),
@@ -1824,18 +2007,25 @@ impl App {
                     .fg(Color::White)
                     .add_modifier(Modifier::BOLD),
             )),
-            Line::from(Span::styled(
-                "Enter: confirm   Esc: cancel",
-                Style::default().fg(Color::DarkGray),
-            )),
-        ])
-        .block(block)
-        .wrap(Wrap { trim: false });
-        f.render_widget(inner, area);
+        ];
+        lines.extend(ac);
+        lines.push(Line::from(Span::styled(
+            "Enter: confirm   Esc: cancel",
+            Style::default().fg(Color::DarkGray),
+        )));
+        f.render_widget(
+            Paragraph::new(lines)
+                .block(block)
+                .wrap(Wrap { trim: false }),
+            area,
+        );
     }
 
     fn draw_kv(&self, f: &mut Frame, form: &KvInputState) {
-        let area = centered_rect(60, 8, f.area());
+        let cands = self.autocomplete_candidates();
+        let ac = self.ac_lines(&cands);
+        let height = 3 + ac.len() as u16 + 2;
+        let area = centered_rect(60, height, f.area());
         f.render_widget(Clear, area);
         let block = Block::default()
             .borders(Borders::ALL)
@@ -1861,14 +2051,17 @@ impl App {
             ])
         };
 
-        let inner = Paragraph::new(vec![
+        let mut lines = vec![
             field("Key:", &form.key, form.active == KvField::Key),
-            Line::from(""),
             field("Value:", &form.value, form.active == KvField::Value),
-        ])
-        .block(block)
-        .wrap(Wrap { trim: false });
-        f.render_widget(inner, area);
+        ];
+        lines.extend(ac);
+        f.render_widget(
+            Paragraph::new(lines)
+                .block(block)
+                .wrap(Wrap { trim: false }),
+            area,
+        );
     }
 
     fn draw_confirm(&self, f: &mut Frame, confirm: &ConfirmState) {
@@ -2073,6 +2266,18 @@ fn editor_template(
     out.push_str("# Save and quit to apply, or quit without saving to cancel.\n\n");
     out.push_str(&envfile::serialize(values));
     out
+}
+
+/// If `buffer` ends with an unclosed `${…` reference, return the partial text
+/// typed after `${` (the autocomplete query).
+fn open_ref_query(buffer: &str) -> Option<String> {
+    let pos = buffer.rfind("${")?;
+    let after = &buffer[pos + 2..];
+    if after.contains('}') {
+        None
+    } else {
+        Some(after.to_string())
+    }
 }
 
 /// Byte offset of the `n`-th character in `s` (or `s.len()` if past the end).

@@ -1,10 +1,16 @@
-//! Reference resolution for values of the form `${project.env.key}`.
+//! Reference resolution for secret values.
 //!
-//! A value may contain one or more references. Each reference points at
-//! another secret anywhere in the store, so the same value can be shared
-//! across projects/environments instead of being duplicated. References are
-//! resolved recursively (a referenced value may itself contain references)
-//! with cycle detection.
+//! A value may contain one or more references to other secrets, written in
+//! one of three forms depending on how much context you want to repeat:
+//!
+//! - `${project.env.secret}` — fully qualified, points anywhere in the store;
+//! - `${env.secret}`         — another environment in the *same* project;
+//! - `${secret}`             — another secret in the *same* project + env.
+//!
+//! References resolve relative to the secret that contains them, including
+//! nested references (a referenced value is resolved relative to *its* own
+//! project/env). Resolution is recursive with cycle detection, so shared
+//! values can live in exactly one place instead of being duplicated.
 
 use std::collections::HashSet;
 
@@ -15,14 +21,14 @@ use crate::model::Store;
 /// A fully-qualified pointer to a single secret.
 type Ref = (String, String, String);
 
-/// Resolve all `${a.b.c}` references inside `raw`, using `store` for lookups.
+/// Resolve all references inside `raw`, using `store` for lookups.
 ///
-/// `origin` is the secret currently being resolved (project, env, key); it is
-/// used to seed cycle detection.
+/// `origin` is the secret currently being resolved (project, env, key); it
+/// provides the context for relative references and seeds cycle detection.
 pub fn resolve(store: &Store, origin: &Ref, raw: &str) -> Result<String> {
     let mut seen = HashSet::new();
     seen.insert(origin.clone());
-    resolve_inner(store, raw, &mut seen)
+    resolve_inner(store, &origin.0, &origin.1, raw, &mut seen)
 }
 
 /// Convenience: resolve a value that lives at a known location in the store.
@@ -35,7 +41,15 @@ pub fn resolve_at(store: &Store, project: &str, env: &str, key: &str) -> Result<
     )
 }
 
-fn resolve_inner(store: &Store, raw: &str, seen: &mut HashSet<Ref>) -> Result<String> {
+/// Resolve references in `raw`, where bare/relative references are interpreted
+/// relative to `cur_project` / `cur_env`.
+fn resolve_inner(
+    store: &Store,
+    cur_project: &str,
+    cur_env: &str,
+    raw: &str,
+    seen: &mut HashSet<Ref>,
+) -> Result<String> {
     let mut out = String::with_capacity(raw.len());
     let bytes = raw.as_bytes();
     let mut i = 0;
@@ -45,7 +59,7 @@ fn resolve_inner(store: &Store, raw: &str, seen: &mut HashSet<Ref>) -> Result<St
         if bytes[i] == b'$' && i + 1 < bytes.len() && bytes[i + 1] == b'{' {
             if let Some(end) = raw[i + 2..].find('}') {
                 let inner = &raw[i + 2..i + 2 + end];
-                let resolved = resolve_reference(store, inner, seen)?;
+                let resolved = resolve_reference(store, cur_project, cur_env, inner, seen)?;
                 out.push_str(&resolved);
                 i = i + 2 + end + 1; // skip past the closing `}`
                 continue;
@@ -60,16 +74,33 @@ fn resolve_inner(store: &Store, raw: &str, seen: &mut HashSet<Ref>) -> Result<St
     Ok(out)
 }
 
-fn resolve_reference(store: &Store, inner: &str, seen: &mut HashSet<Ref>) -> Result<String> {
-    let parts: Vec<&str> = inner.splitn(3, '.').collect();
-    if parts.len() != 3 {
-        bail!("invalid reference `${{{inner}}}` (expected `${{project.env.key}}`)");
+fn resolve_reference(
+    store: &Store,
+    cur_project: &str,
+    cur_env: &str,
+    inner: &str,
+    seen: &mut HashSet<Ref>,
+) -> Result<String> {
+    let parts: Vec<&str> = inner.split('.').collect();
+    if parts.iter().any(|p| p.is_empty()) {
+        bail!(
+            "invalid reference `${{{inner}}}` (expected `${{secret}}`, \
+             `${{env.secret}}` or `${{project.env.secret}}`)"
+        );
     }
-    let key_ref: Ref = (
-        parts[0].to_string(),
-        parts[1].to_string(),
-        parts[2].to_string(),
-    );
+    let key_ref: Ref = match parts.as_slice() {
+        [secret] => (
+            cur_project.to_string(),
+            cur_env.to_string(),
+            secret.to_string(),
+        ),
+        [env, secret] => (cur_project.to_string(), env.to_string(), secret.to_string()),
+        [project, env, secret] => (project.to_string(), env.to_string(), secret.to_string()),
+        _ => bail!(
+            "invalid reference `${{{inner}}}` (expected `${{secret}}`, \
+             `${{env.secret}}` or `${{project.env.secret}}`)"
+        ),
+    };
 
     if seen.contains(&key_ref) {
         bail!(
@@ -83,7 +114,7 @@ fn resolve_reference(store: &Store, inner: &str, seen: &mut HashSet<Ref>) -> Res
     let target = match store.value(&key_ref.0, &key_ref.1, &key_ref.2) {
         Some(v) => v.clone(),
         None => bail!(
-            "reference `${{{}.{}.{}}}` points to a missing secret",
+            "reference `${{{inner}}}` points to a missing secret `{}.{}.{}`",
             key_ref.0,
             key_ref.1,
             key_ref.2
@@ -91,7 +122,8 @@ fn resolve_reference(store: &Store, inner: &str, seen: &mut HashSet<Ref>) -> Res
     };
 
     seen.insert(key_ref.clone());
-    let resolved = resolve_inner(store, &target, seen)?;
+    // Nested references resolve relative to the referenced secret's location.
+    let resolved = resolve_inner(store, &key_ref.0, &key_ref.1, &target, seen)?;
     seen.remove(&key_ref);
     Ok(resolved)
 }
@@ -187,5 +219,58 @@ mod tests {
         let origin = ("p".into(), "e".into(), "k".into());
         let err = resolve(&store, &origin, "${a.b.c}").unwrap_err();
         assert!(err.to_string().contains("missing"));
+    }
+
+    #[test]
+    fn same_env_reference() {
+        // ${secret} → same project + env
+        let store = store_with(&[
+            ("api", "dev", "HOST", "db.local"),
+            ("api", "dev", "URL", "http://${HOST}:5432"),
+        ]);
+        assert_eq!(
+            resolve_at(&store, "api", "dev", "URL").unwrap(),
+            "http://db.local:5432"
+        );
+    }
+
+    #[test]
+    fn same_project_other_env_reference() {
+        // ${env.secret} → same project, different env
+        let store = store_with(&[
+            ("api", "shared", "TOKEN", "abc123"),
+            ("api", "dev", "AUTH", "Bearer ${shared.TOKEN}"),
+        ]);
+        assert_eq!(
+            resolve_at(&store, "api", "dev", "AUTH").unwrap(),
+            "Bearer abc123"
+        );
+    }
+
+    #[test]
+    fn relative_reference_uses_target_context() {
+        // A (api/dev) → ${web.KEY} resolves to api/web/KEY, whose value uses a
+        // bare ${BASE} that must resolve within api/web (not api/dev).
+        let store = store_with(&[
+            ("api", "web", "BASE", "from-web"),
+            ("api", "web", "KEY", "[${BASE}]"),
+            ("api", "dev", "A", "${web.KEY}"),
+        ]);
+        assert_eq!(resolve_at(&store, "api", "dev", "A").unwrap(), "[from-web]");
+    }
+
+    #[test]
+    fn self_reference_is_a_cycle() {
+        let store = store_with(&[("p", "e", "A", "${A}")]);
+        let err = resolve_at(&store, "p", "e", "A").unwrap_err();
+        assert!(err.to_string().contains("circular"));
+    }
+
+    #[test]
+    fn empty_reference_errors() {
+        let store = Store::default();
+        let origin = ("p".into(), "e".into(), "k".into());
+        assert!(resolve(&store, &origin, "${}").is_err());
+        assert!(resolve(&store, &origin, "${a.}").is_err());
     }
 }
