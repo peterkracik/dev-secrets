@@ -1,9 +1,9 @@
 <h1 align="center">dev-secrets</h1>
 
 <p align="center">
-  A fast, <a href="https://k9scli.io/">k9s</a>-style terminal UI (and full CLI) for managing
-  your <strong>local development</strong> secrets — organized by <strong>project</strong> and
-  <strong>environment</strong> instead of scattered <code>.env</code> files.
+  A fast, <a href="https://github.com/nvim-telescope/telescope.nvim">Telescope</a>-style terminal UI
+  (and full CLI) for managing your <strong>local development</strong> secrets — organized by
+  <strong>project</strong> and <strong>environment</strong> instead of scattered <code>.env</code> files.
 </p>
 
 <p align="center">
@@ -29,7 +29,7 @@ Project              e.g. "api"
 When you sit down to work, you export the right set on demand:
 
 ```sh
-devsecrets export .env          # writes the default environment to ./.env
+devsecrets export .env          # writes this folder's assigned environment to ./.env
 ```
 
 Everything you can do in the interactive TUI you can also do from the CLI, so
@@ -69,7 +69,19 @@ dev-secrets is a single self-contained binary called `devsecrets`.
 - [Rust](https://rustup.rs/) **1.74 or newer** (stable). That's the only
   build dependency — no system libraries required.
 
-### Option 1 — install from source with Cargo (recommended)
+### Option 1 — Homebrew (macOS / Linux)
+
+A formula lives in [`Formula/devsecrets.rb`](Formula/devsecrets.rb). Until
+tagged-release bottles are published it builds the latest from `main`:
+
+```sh
+brew install --HEAD https://raw.githubusercontent.com/peterkracik/localenvs/main/Formula/devsecrets.rb
+```
+
+Once the formula is published to a tap (e.g. `peterkracik/homebrew-tap`) this
+becomes simply `brew install peterkracik/tap/devsecrets`.
+
+### Option 2 — install from source with Cargo (recommended)
 
 ```sh
 git clone https://github.com/peterkracik/localenvs.git
@@ -80,13 +92,13 @@ cargo install --path .
 This builds an optimized binary and places `devsecrets` in
 `~/.cargo/bin` (make sure that directory is on your `PATH`).
 
-### Option 2 — install directly from Git
+### Option 3 — install directly from Git
 
 ```sh
 cargo install --git https://github.com/peterkracik/localenvs.git
 ```
 
-### Option 3 — build a release binary manually
+### Option 4 — build a release binary manually
 
 ```sh
 git clone https://github.com/peterkracik/localenvs.git
@@ -410,8 +422,10 @@ export/editing they are double-quoted and escaped only when needed (e.g. a
 round-trip is lossless.
 
 **What happens if I run a command before `setup`?**
-dev-secrets initializes the default location automatically, so `setup` is
-only needed if you want a custom store location.
+Everything works — the store is created automatically on first run. `setup`
+only records a folder → project/env assignment so you can drop the
+`--project`/`--env` flags in that folder. Use explicit flags anywhere else,
+and `devsecrets settings store <path>` to relocate the store.
 
 ---
 
