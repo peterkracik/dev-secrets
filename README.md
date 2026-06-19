@@ -119,6 +119,29 @@ devsecrets --version
 devsecrets --help
 ```
 
+### Recommended: a short `ds` alias
+
+`devsecrets` is a lot to type for a tool you reach for constantly. We recommend
+aliasing it to **`ds`**. Add this to your shell's startup file (`~/.bashrc`,
+`~/.zshrc`, …):
+
+```sh
+alias ds=devsecrets
+```
+
+Reload your shell (or `source` the file) and everything in this README works
+with `ds`:
+
+```sh
+ds setup
+ds secret list      # this folder's secrets
+ds env list         # this folder's environments
+ds export .env
+```
+
+The rest of the docs spell out `devsecrets` in full, but `ds` is interchangeable
+once the alias is set.
+
 ---
 
 ## Quick start
@@ -343,22 +366,37 @@ devsecrets project delete <name>
 
 ```sh
 devsecrets env create -p <project> <name>
-devsecrets env list -p <project>
+devsecrets env list [-p <project>]
 devsecrets env set-default -p <project> <name>
 devsecrets env delete -p <project> <name>
 ```
+
+`env list` drops the `-p` flag once the folder is assigned (`devsecrets
+setup`): a bare `devsecrets env list` shows the environments of this folder's
+project.
 
 ### Secrets
 
 ```sh
 devsecrets secret set    -p <project> -e <env> <KEY> <VALUE> [--type text|number|json]
 devsecrets secret get    -p <project> -e <env> <KEY> [--raw]
-devsecrets secret list   -p <project> -e <env> [--mask]
+devsecrets secret list   [-p <project>] [-e <env>] [--mask]
 devsecrets secret delete -p <project> -e <env> <KEY>
 ```
 
 `get` resolves references by default (use `--raw` for the literal value).
 `list` shows values by default; pass `--mask` to obscure them.
+
+Like `export` and `import`, `secret list` drops the `-p`/`-e` flags once the
+folder is assigned (`devsecrets setup`). From inside an assigned folder, a bare
+`devsecrets secret list` shows that folder's secrets (`secrets` is also accepted
+as an alias for `secret`):
+
+```sh
+cd ~/code/api
+devsecrets secret list   # no flags — uses this folder's project/env
+devsecrets secrets list  # same thing
+```
 
 **Value types.** Each secret has a type — `text` (default), `number`, or
 `json` — which is validated on set. `--type number` rejects non-numbers and

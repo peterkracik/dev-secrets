@@ -38,6 +38,28 @@ impl Sandbox {
             .expect("failed to run devsecrets")
     }
 
+    /// Like `run`, but executes the binary from `cwd` so folder-based
+    /// assignments resolve against it.
+    fn run_in(&self, cwd: &std::path::Path, args: &[&str]) -> Output {
+        Command::new(env!("CARGO_BIN_EXE_devsecrets"))
+            .args(args)
+            .current_dir(cwd)
+            .env("XDG_CONFIG_HOME", &self.dir)
+            .env("HOME", &self.dir)
+            .output()
+            .expect("failed to run devsecrets")
+    }
+
+    fn ok_in(&self, cwd: &std::path::Path, args: &[&str]) -> String {
+        let out = self.run_in(cwd, args);
+        assert!(
+            out.status.success(),
+            "command {args:?} failed: {}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+        String::from_utf8(out.stdout).unwrap()
+    }
+
     fn ok(&self, args: &[&str]) -> String {
         let out = self.run(args);
         assert!(
@@ -220,6 +242,57 @@ fn type_validation_rejects_bad_values() {
         "--type",
         "json",
     ]);
+}
+
+#[test]
+fn list_falls_back_to_folder_assignment() {
+    let sb = Sandbox::new();
+    sb.ok(&["project", "create", "api"]);
+    sb.ok(&["env", "create", "-p", "api", "dev"]);
+    sb.ok(&[
+        "secret",
+        "set",
+        "-p",
+        "api",
+        "-e",
+        "dev",
+        "DB_HOST",
+        "localhost",
+    ]);
+
+    // A folder we'll assign to api/dev.
+    let folder = sb.dir.join("workdir");
+    std::fs::create_dir_all(&folder).unwrap();
+    let canonical = std::fs::canonicalize(&folder).unwrap();
+    let canonical = canonical.to_str().unwrap();
+
+    // Write the assignment directly (setup's wizard needs a TTY).
+    let cfg = sb.dir.join("devsecrets");
+    std::fs::create_dir_all(&cfg).unwrap();
+    std::fs::write(
+        cfg.join("meta.json"),
+        format!("{{\"assignments\":{{\"{canonical}\":{{\"project\":\"api\",\"env\":\"dev\"}}}}}}"),
+    )
+    .unwrap();
+
+    // `secret list` with no -p/-e uses the folder's assignment.
+    let list = sb.ok_in(&folder, &["secret", "list"]);
+    assert!(list.contains("DB_HOST=localhost"), "list was: {list}");
+
+    // The `secrets` alias works too.
+    let aliased = sb.ok_in(&folder, &["secrets", "list"]);
+    assert!(aliased.contains("DB_HOST=localhost"), "list was: {aliased}");
+
+    // `env list` with no -p uses the folder's assigned project.
+    let envs = sb.ok_in(&folder, &["env", "list"]);
+    assert!(envs.contains("dev"), "env list was: {envs}");
+
+    // Without an assignment (run elsewhere), it errors helpfully.
+    let elsewhere = sb.run_in(&sb.dir, &["secret", "list"]);
+    assert!(
+        !elsewhere.status.success(),
+        "expected error without assignment"
+    );
 }
 
 #[test]

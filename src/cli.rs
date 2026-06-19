@@ -79,6 +79,7 @@ pub enum Command {
     },
 
     /// Get/set/list secrets within an environment.
+    #[command(visible_alias = "secrets")]
     Secret {
         #[command(subcommand)]
         action: SecretAction,
@@ -155,8 +156,9 @@ pub enum EnvAction {
     },
     /// List environments within a project.
     List {
+        /// Project to list. Defaults to the project assigned to this folder.
         #[arg(short, long)]
-        project: String,
+        project: Option<String>,
     },
     /// Delete an environment.
     Delete {
@@ -199,10 +201,12 @@ pub enum SecretAction {
     },
     /// List secrets in an environment (values shown by default).
     List {
+        /// Project to list. Defaults to the project assigned to this folder.
         #[arg(short, long)]
-        project: String,
+        project: Option<String>,
+        /// Environment to list. Defaults to the folder's assigned env.
         #[arg(short, long)]
-        env: String,
+        env: Option<String>,
         /// Mask values instead of showing them.
         #[arg(long)]
         mask: bool,
