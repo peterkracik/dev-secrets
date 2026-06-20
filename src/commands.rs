@@ -221,6 +221,7 @@ fn env(action: EnvAction) -> Result<()> {
             println!("Created environment `{name}` in `{project}`.");
         }
         EnvAction::List { project } => {
+            let project = resolve_project(project)?;
             let proj = handle
                 .store
                 .project(&project)
@@ -317,6 +318,7 @@ fn secret(action: SecretAction) -> Result<()> {
             env,
             mask: masked,
         } => {
+            let (project, env) = resolve_target(project, env)?;
             let e = env_ref(&handle, &project, &env)?;
             for (key, value) in &e.values {
                 if masked {
@@ -476,6 +478,16 @@ fn resolve_target(project: Option<String>, env: Option<String>) -> Result<(Strin
              (run `devsecrets setup` here, or pass --env)",
         )?;
     Ok((project, env))
+}
+
+/// Resolve a project from an explicit arg, falling back to the current
+/// folder's assignment. Used by listings that only need a project.
+fn resolve_project(project: Option<String>) -> Result<String> {
+    let assignment = meta::load()?.get(&meta::current_dir()?).cloned();
+    project.or_else(|| assignment.map(|a| a.project)).context(
+        "no project given and this folder isn't assigned \
+             (run `devsecrets setup` here, or pass --project)",
+    )
 }
 
 fn export(
