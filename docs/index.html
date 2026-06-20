@@ -98,15 +98,15 @@
             <div class="p-4 overflow-x-auto">
 <pre class="term-screen">
 <span class="c-dim">╭─</span> <span class="c-violet">Secrets</span> <span class="c-dim">─────────────────────────────────────╮</span>
-<span class="c-dim">│</span> <span class="c-green">/</span> db<span class="c-cursor animate-blink">_</span>                                          <span class="c-dim">│</span>
+<span class="c-dim">│</span> <span class="c-green">/</span> db<span class="c-cursor animate-blink">_</span>                                           <span class="c-dim">│</span>
 <span class="c-dim">├──────────────────────┬────────────────────────┤</span>
-<span class="c-dim">│</span><span class="c-sel"> v api        (2 env) </span><span class="c-dim">│</span> <span class="c-key">DB_HOST</span> = localhost     <span class="c-dim">│</span>
-<span class="c-dim">│</span>   <span class="c-green">- dev *</span>  3 keys    <span class="c-dim">│</span> <span class="c-key">DB_PORT</span> = 5432          <span class="c-dim">│</span>
-<span class="c-dim">│</span>   - prod   3 keys    <span class="c-dim">│</span> <span class="c-key">URL</span>     = <span class="c-ref">$ref:DB_HOST</span>  <span class="c-dim">│</span>
-<span class="c-dim">│</span> > web        (1 env) <span class="c-dim">│</span>                         <span class="c-dim">│</span>
-<span class="c-dim">│</span> > infra      (3 env) <span class="c-dim">│</span><span class="c-dim"> preview - s reveals     </span><span class="c-dim">│</span>
+<span class="c-dim">│</span><span class="c-sel"> v api        (2 env) </span><span class="c-dim">│</span> <span class="c-key">DB_HOST</span> = localhost      <span class="c-dim">│</span>
+<span class="c-dim">│</span>   <span class="c-green">- dev *</span>  3 keys    <span class="c-dim">│</span> <span class="c-key">DB_PORT</span> = 5432           <span class="c-dim">│</span>
+<span class="c-dim">│</span>   - prod   3 keys    <span class="c-dim">│</span> <span class="c-key">URL</span>     = <span class="c-ref">$ref:DB_HOST</span>   <span class="c-dim">│</span>
+<span class="c-dim">│</span> > web        (1 env) <span class="c-dim">│</span>                          <span class="c-dim">│</span>
+<span class="c-dim">│</span> > infra      (3 env) <span class="c-dim">│</span><span class="c-dim"> preview - s reveals      </span><span class="c-dim">│</span>
 <span class="c-dim">├──────────────────────┴────────────────────────┤</span>
-<span class="c-dim">│</span> <span class="c-green">/</span> filter  <span class="c-violet">n</span> new  <span class="c-violet">x</span> export  <span class="c-violet">?</span> help              <span class="c-dim">│</span>
+<span class="c-dim">│</span> <span class="c-green">/</span> filter  <span class="c-violet">n</span> new  <span class="c-violet">x</span> export  <span class="c-violet">?</span> help               <span class="c-dim">│</span>
 <span class="c-dim">╰───────────────────────────────────────────────╯</span>
 </pre>
             </div>
@@ -311,15 +311,15 @@
           <div class="p-4 overflow-x-auto">
 <pre class="term-screen text-[14px]">
 <span class="c-dim">╭─</span> <span class="c-violet">api / dev</span> <span class="c-dim">─────────────────────────────────╮</span>
-<span class="c-dim">│</span> <span class="c-green">/</span> <span class="c-cursor animate-blink">_</span>                                         <span class="c-dim">│</span>
+<span class="c-dim">│</span> <span class="c-green">/</span> <span class="c-cursor animate-blink">_</span>                                           <span class="c-dim">│</span>
 <span class="c-dim">├──────────────────────┬──────────────────────┤</span>
-<span class="c-dim">│</span><span class="c-sel"> DB_HOST              </span><span class="c-dim">│</span> <span class="c-key">DB_HOST</span>              <span class="c-dim">│</span>
-<span class="c-dim">│</span> <span class="c-key">DB_PORT</span>              <span class="c-dim">│</span> <span class="c-dim">type:</span> text           <span class="c-dim">│</span>
-<span class="c-dim">│</span> <span class="c-key">URL</span> <span class="c-ref">-&gt; $ref:DB_HOST</span>  <span class="c-dim">│</span>                      <span class="c-dim">│</span>
-<span class="c-dim">│</span> API_KEY <span class="c-mask">********</span>     <span class="c-dim">│</span> <span class="c-green">localhost</span>            <span class="c-dim">│</span>
-<span class="c-dim">│</span>                      <span class="c-dim">│</span>                      <span class="c-dim">│</span>
+<span class="c-dim">│</span><span class="c-sel"> DB_HOST              </span><span class="c-dim">│</span> <span class="c-key">DB_HOST</span>                <span class="c-dim">│</span>
+<span class="c-dim">│</span> <span class="c-key">DB_PORT</span>              <span class="c-dim">│</span> <span class="c-dim">type:</span> text             <span class="c-dim">│</span>
+<span class="c-dim">│</span> <span class="c-key">URL</span> <span class="c-ref">-&gt; $ref:DB_HOST</span>  <span class="c-dim">│</span>                        <span class="c-dim">│</span>
+<span class="c-dim">│</span> API_KEY <span class="c-mask">********</span>     <span class="c-dim">│</span> <span class="c-green">localhost</span>              <span class="c-dim">│</span>
+<span class="c-dim">│</span>                      <span class="c-dim">│</span>                        <span class="c-dim">│</span>
 <span class="c-dim">├──────────────────────┴──────────────────────┤</span>
-<span class="c-dim">│</span> <span class="c-violet">e</span> edit  <span class="c-violet">g</span> goto ref  <span class="c-violet">s</span> reveal  <span class="c-violet">esc</span>           <span class="c-dim">│</span>
+<span class="c-dim">│</span> <span class="c-violet">e</span> edit  <span class="c-violet">g</span> goto ref  <span class="c-violet">s</span> reveal  <span class="c-violet">esc</span>             <span class="c-dim">│</span>
 <span class="c-dim">╰─────────────────────────────────────────────╯</span>
 </pre>
           </div>
