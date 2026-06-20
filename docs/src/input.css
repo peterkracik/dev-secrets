@@ -33,7 +33,7 @@
 
 /* ───────────────────────── Base ───────────────────────── */
 @layer base {
-  html { scroll-behavior: smooth; }
+  html { scroll-behavior: smooth; overflow-x: hidden; }
   body {
     background: var(--color-ink);
     color: var(--color-fg);
@@ -55,7 +55,7 @@
 
 /* ───────────────────────── Components ───────────────────────── */
 @layer components {
-  .container-x { @apply w-full max-w-[1140px] mx-auto px-6; }
+  .container-x { @apply w-full max-w-[1140px] mx-auto px-4 sm:px-6; }
 
   .btn {
     @apply inline-flex items-center gap-2 font-semibold text-[15px]
@@ -91,7 +91,7 @@
     @apply flex items-center gap-3 bg-ink2 border border-line2 rounded-xl
            px-4 py-3 font-mono text-[15px];
   }
-  .install-cmd { @apply text-fg flex-1 whitespace-nowrap overflow-hidden text-ellipsis; }
+  .install-cmd { @apply text-fg flex-1 min-w-0 whitespace-nowrap overflow-hidden text-ellipsis; }
   .install-copy {
     @apply bg-surface2 border border-line2 text-muted rounded-md px-3 py-1
            font-sans font-semibold text-[13px] cursor-pointer transition duration-150 shrink-0;
@@ -106,7 +106,7 @@
   }
   .term-bar { @apply flex items-center gap-2 px-3.5 py-2.5 bg-[#101626] border-b border-line; }
   .term-dot { @apply w-3 h-3 rounded-full inline-block; }
-  .term-screen { @apply m-0 font-mono text-[13.5px] leading-[1.55] whitespace-pre text-muted; }
+  .term-screen { @apply m-0 font-mono text-[11px] sm:text-[13.5px] leading-[1.55] whitespace-pre text-muted; }
 
   /* Code block */
   .block {
