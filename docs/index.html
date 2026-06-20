@@ -1,0 +1,456 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>dev-secrets — a lightweight, local TUI for your dev secrets</title>
+  <meta name="description" content="A tiny, local-first Telescope-style terminal UI and full CLI for managing development secrets — organized by project and environment instead of scattered .env files. A single Rust binary, no daemon, no cloud, no account." />
+
+  <meta property="og:type" content="website" />
+  <meta property="og:title" content="dev-secrets — a lightweight, local TUI for dev secrets" />
+  <meta property="og:description" content="Stop copying .env files between folders. Organize local dev secrets by project → environment → secret in a single, tiny Rust binary. 100% local, no cloud." />
+  <meta property="og:url" content="https://peterkracik.github.io/dev-secrets/" />
+  <meta name="twitter:card" content="summary_large_image" />
+  <meta name="twitter:title" content="dev-secrets — a lightweight, local TUI for dev secrets" />
+  <meta name="twitter:description" content="Organize local dev secrets by project → environment → secret. A single tiny Rust binary, 100% local." />
+
+  <link rel="icon" type="image/svg+xml" href="favicon.svg" />
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500;700&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="tailwind.css" />
+</head>
+<body class="font-sans leading-relaxed overflow-x-hidden">
+
+  <!-- ───────────────────────── Nav ───────────────────────── -->
+  <header class="sticky top-0 z-50 backdrop-blur-md bg-ink/70 border-b border-line">
+    <div class="container-x flex items-center gap-5 h-16">
+      <a class="flex items-center gap-2.5 font-extrabold tracking-tight" href="#top" aria-label="dev-secrets home">
+        <img src="favicon.svg" alt="" width="28" height="28" />
+        <span class="text-lg">dev-secrets</span>
+      </a>
+      <nav class="hidden md:flex gap-7 ml-auto text-[15px] text-muted" aria-label="Primary">
+        <a class="hover:text-fg transition" href="#why">Why</a>
+        <a class="hover:text-fg transition" href="#features">Features</a>
+        <a class="hover:text-fg transition" href="#demo">TUI</a>
+        <a class="hover:text-fg transition" href="#quickstart">Quick start</a>
+        <a class="hover:text-fg transition" href="#install">Install</a>
+      </nav>
+      <a class="btn btn-ghost ml-auto md:ml-2 px-3.5 py-2 text-sm" href="https://github.com/peterkracik/dev-secrets" target="_blank" rel="noopener">
+        <svg viewBox="0 0 16 16" width="16" height="16" aria-hidden="true"><path fill="currentColor" d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.01 8.01 0 0016 8c0-4.42-3.58-8-8-8z"/></svg>
+        <span class="hidden sm:inline">GitHub</span>
+      </a>
+    </div>
+  </header>
+
+  <main id="top">
+    <!-- ───────────────────────── Hero ───────────────────────── -->
+    <section class="relative overflow-hidden pt-16 pb-16">
+      <div class="absolute inset-0 -z-10" aria-hidden="true"
+           style="background: radial-gradient(700px 380px at 78% 18%, rgba(56,189,248,.10), transparent 65%);"></div>
+      <div class="container-x grid lg:grid-cols-[1.05fr_1fr] gap-14 items-center">
+        <div>
+          <span class="inline-flex items-center gap-2.5 bg-surface border border-line2 text-muted text-[13px] font-medium px-3 py-1.5 rounded-full mb-6">
+            <span class="w-2 h-2 rounded-full bg-brand shadow-[0_0_0_4px_rgba(74,222,128,.18)]"></span>
+            Lightweight · local-first · written in Rust
+          </span>
+          <h1 class="text-[clamp(34px,5vw,54px)] font-extrabold tracking-tight">
+            Your dev secrets,<br />
+            <span class="bg-gradient-to-r from-brand via-cyan to-violet bg-clip-text text-transparent">organized by project</span><br />
+            — not scattered <code class="text-cyan text-[.82em]">.env</code> files.
+          </h1>
+          <p class="text-lg text-muted mt-6 mb-7 max-w-xl">
+            <strong class="text-fg">dev-secrets</strong> is a tiny, local-first,
+            Telescope-style terminal UI (and full CLI) that keeps all your
+            development values in one place — grouped by
+            <em>project → environment → secret</em> — and exports the right set
+            on demand. No daemon, no cloud, no account.
+          </p>
+
+          <div class="install max-w-xl" data-copy="brew install peterkracik/tap/devsecrets">
+            <span class="text-brand font-bold">$</span>
+            <code class="install-cmd">brew install peterkracik/tap/devsecrets</code>
+            <button class="install-copy" type="button" aria-label="Copy install command">Copy</button>
+          </div>
+
+          <div class="flex gap-3 flex-wrap mt-6">
+            <a class="btn btn-primary" href="#quickstart">Get started</a>
+            <a class="btn btn-ghost" href="https://github.com/peterkracik/dev-secrets" target="_blank" rel="noopener">Star on GitHub</a>
+          </div>
+
+          <ul class="list-none flex flex-wrap gap-2.5 p-0 mt-7 text-sm" aria-label="Highlights">
+            <li class="bg-surface border border-line px-3 py-1.5 rounded-full text-muted">🪶 Single tiny binary</li>
+            <li class="bg-surface border border-line px-3 py-1.5 rounded-full text-muted">🔌 100% offline</li>
+            <li class="bg-surface border border-line px-3 py-1.5 rounded-full text-muted">🔭 Fuzzy TUI</li>
+            <li class="bg-surface border border-line px-3 py-1.5 rounded-full text-muted">⌨️ Full CLI parity</li>
+          </ul>
+        </div>
+
+        <!-- Faux terminal showing the Telescope-style TUI -->
+        <div>
+          <div class="term" role="img" aria-label="The dev-secrets terminal UI: a centered floating window listing projects and environments with a live preview pane.">
+            <div class="term-bar">
+              <span class="term-dot bg-[#ff5f57]"></span>
+              <span class="term-dot bg-[#febc2e]"></span>
+              <span class="term-dot bg-[#28c840]"></span>
+              <span class="ml-2.5 font-mono text-[12px] text-faint">devsecrets</span>
+            </div>
+            <div class="p-4 overflow-x-auto">
+<pre class="term-screen">
+<span class="c-dim">╭─</span> <span class="c-violet">Secrets</span> <span class="c-dim">───────────────────────────────╮</span>
+<span class="c-dim">│</span> <span class="c-green">/</span> db<span class="c-cursor animate-blink">▏</span>                                  <span class="c-dim">│</span>
+<span class="c-dim">├──────────────────────┬─────────────────────┤</span>
+<span class="c-dim">│</span> <span class="c-sel">▾ api        (2 env) </span><span class="c-dim">│</span> <span class="c-key">DB_HOST</span> = localhost  <span class="c-dim">│</span>
+<span class="c-dim">│</span>   <span class="c-green">– dev ★</span>  3 keys     <span class="c-dim">│</span> <span class="c-key">DB_PORT</span> = 5432       <span class="c-dim">│</span>
+<span class="c-dim">│</span>   – prod   3 keys     <span class="c-dim">│</span> <span class="c-key">URL</span>     = <span class="c-ref">$ref:DB_HOST</span> <span class="c-dim">│</span>
+<span class="c-dim">│</span> ▸ web        (1 env) <span class="c-dim">│</span>                     <span class="c-dim">│</span>
+<span class="c-dim">│</span> ▸ infra      (3 env) <span class="c-dim">│</span> <span class="c-dim">preview · s reveals  </span><span class="c-dim">│</span>
+<span class="c-dim">├──────────────────────┴─────────────────────┤</span>
+<span class="c-dim">│</span> <span class="c-green">/</span> filter  <span class="c-violet">n</span> new  <span class="c-violet">x</span> export  <span class="c-violet">?</span> help    <span class="c-dim">│</span>
+<span class="c-dim">╰─────────────────────────────────────────────╯</span>
+</pre>
+            </div>
+          </div>
+          <p class="text-center text-faint text-[13px] mt-3.5">Centered, bounded floating window · fuzzy filter · live preview</p>
+        </div>
+      </div>
+    </section>
+
+    <!-- ───────────────────────── Lightweight & local strip ───────────────────────── -->
+    <section class="py-12 bg-ink2 border-y border-line">
+      <div class="container-x grid sm:grid-cols-2 lg:grid-cols-4 gap-5">
+        <div class="text-center px-3">
+          <div class="text-2xl mb-2">🪶</div>
+          <h3 class="font-bold text-[15px]">One small binary</h3>
+          <p class="text-muted text-sm mt-1">A single self-contained executable. No runtime, no system libraries to install.</p>
+        </div>
+        <div class="text-center px-3">
+          <div class="text-2xl mb-2">🔌</div>
+          <h3 class="font-bold text-[15px]">100% local</h3>
+          <p class="text-muted text-sm mt-1">Everything stays on your disk as plain JSON. No cloud, no account, fully offline.</p>
+        </div>
+        <div class="text-center px-3">
+          <div class="text-2xl mb-2">⚡</div>
+          <h3 class="font-bold text-[15px]">Instant &amp; quiet</h3>
+          <p class="text-muted text-sm mt-1">Starts immediately, no background daemon or service running on your machine.</p>
+        </div>
+        <div class="text-center px-3">
+          <div class="text-2xl mb-2">🦀</div>
+          <h3 class="font-bold text-[15px]">Built in Rust</h3>
+          <p class="text-muted text-sm mt-1">Fast, dependency-free, and portable across macOS, Linux and Windows.</p>
+        </div>
+      </div>
+    </section>
+
+    <!-- ───────────────────────── Why ───────────────────────── -->
+    <section id="why" class="py-[86px]">
+      <div class="container-x grid md:grid-cols-[1fr_auto_1fr] gap-8 items-center">
+        <div>
+          <h2 class="text-[22px] font-bold mb-3.5">😵‍💫 The usual mess</h2>
+          <p class="text-muted">
+            Several projects, each with a few environments
+            (<code class="chip-code">dev</code>, <code class="chip-code">staging</code>,
+            <code class="chip-code">prod</code>, a teammate's setup…). You end up with
+            <code class="chip-code">.env</code> files copied between folders, slowly drifting
+            out of sync — and no idea which one is current.
+          </p>
+        </div>
+        <div class="text-3xl text-line2 justify-self-center max-md:rotate-90" aria-hidden="true">→</div>
+        <div>
+          <h2 class="text-[22px] font-bold text-brand mb-3.5">✨ One organized store</h2>
+<pre class="font-mono text-[13px] leading-[1.7] text-muted bg-surface border border-line rounded-[10px] px-4 py-3.5 mb-4 whitespace-pre overflow-x-auto">Project              e.g. "api"
+└─ Environment       "dev", "staging", "prod"
+   └─ Secrets        KEY = VALUE pairs</pre>
+          <p class="text-muted mb-3">Sit down to work, export the right set on demand:</p>
+          <div class="font-mono text-sm bg-[#0b0f1a] border border-line2 rounded-[10px] px-4 py-3">
+            <span class="c-green">$</span> devsecrets export .env
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- ───────────────────────── Demo video placeholder ───────────────────────── -->
+    <section id="video" class="py-[86px] bg-ink2 border-y border-line">
+      <div class="container-x">
+        <div class="text-center max-w-2xl mx-auto mb-12">
+          <h2 class="text-[clamp(28px,4vw,38px)] font-extrabold tracking-tight">See it in action</h2>
+          <p class="text-muted text-[17px] mt-3">A 60-second tour of organizing, referencing and exporting your dev secrets.</p>
+        </div>
+
+        <!-- Replace this placeholder with a <video> or asciinema/YouTube embed when ready. -->
+        <figure class="max-w-4xl mx-auto m-0">
+          <div class="term">
+            <div class="term-bar">
+              <span class="term-dot bg-[#ff5f57]"></span>
+              <span class="term-dot bg-[#febc2e]"></span>
+              <span class="term-dot bg-[#28c840]"></span>
+              <span class="ml-2.5 font-mono text-[12px] text-faint">devsecrets — demo</span>
+            </div>
+            <div class="relative aspect-video grid place-items-center bg-[radial-gradient(circle_at_50%_40%,rgba(74,222,128,.08),transparent_60%)]">
+              <div class="text-center px-6">
+                <div class="mx-auto mb-5 w-[74px] h-[74px] rounded-full grid place-items-center bg-brand/15 border border-brand/40">
+                  <svg viewBox="0 0 24 24" width="30" height="30" aria-hidden="true">
+                    <path fill="var(--color-brand)" d="M8 5v14l11-7z" />
+                  </svg>
+                </div>
+                <p class="font-semibold text-fg text-lg">Demo video coming soon</p>
+                <p class="text-faint text-sm mt-1.5 font-mono">[ placeholder — drop a screen recording / asciinema cast here ]</p>
+              </div>
+            </div>
+          </div>
+          <figcaption class="text-center text-faint text-[13px] mt-3.5">
+            Prefer text? Jump to the <a class="text-cyan hover:underline" href="#quickstart">quick start</a>.
+          </figcaption>
+        </figure>
+      </div>
+    </section>
+
+    <!-- ───────────────────────── Features ───────────────────────── -->
+    <section id="features" class="py-[86px]">
+      <div class="container-x">
+        <div class="text-center max-w-2xl mx-auto mb-12">
+          <h2 class="text-[clamp(28px,4vw,38px)] font-extrabold tracking-tight">Everything in its place</h2>
+          <p class="text-muted text-[17px] mt-3">One small tool for organizing, referencing, importing and exporting local dev values.</p>
+        </div>
+        <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-[18px]">
+          <article class="card">
+            <div class="card-ico">🗂️</div>
+            <h3 class="text-base font-bold mb-1.5">Organized by hierarchy</h3>
+            <p class="text-muted text-[14.5px]">Project → environment → secret, not by folder. Find any value in seconds.</p>
+          </article>
+          <article class="card">
+            <div class="card-ico">🔭</div>
+            <h3 class="text-base font-bold mb-1.5">Telescope-style TUI</h3>
+            <p class="text-muted text-[14.5px]">Centered floating window, fuzzy search across projects and envs, live preview pane.</p>
+          </article>
+          <article class="card">
+            <div class="card-ico">⌨️</div>
+            <h3 class="text-base font-bold mb-1.5">Full CLI parity</h3>
+            <p class="text-muted text-[14.5px]">Every action is scriptable — fits Makefiles, CI steps and entrypoints just as well.</p>
+          </article>
+          <article class="card">
+            <div class="card-ico">🔗</div>
+            <h3 class="text-base font-bold mb-1.5">Value references</h3>
+            <p class="text-muted text-[14.5px]">Write <code class="chip-code">${project.env.KEY}</code> to reuse a value. Resolved recursively, with cycle detection.</p>
+          </article>
+          <article class="card">
+            <div class="card-ico">📌</div>
+            <h3 class="text-base font-bold mb-1.5">Folder assignments</h3>
+            <p class="text-muted text-[14.5px]"><code class="chip-code">devsecrets setup</code> binds a folder to a project/env, so export "just knows" what to use.</p>
+          </article>
+          <article class="card">
+            <div class="card-ico">📥</div>
+            <h3 class="text-base font-bold mb-1.5">Import &amp; export</h3>
+            <p class="text-muted text-[14.5px]">Pull in existing <code class="chip-code">.env</code> files (merge or replace); export to env, shell, JSON or TOML.</p>
+          </article>
+          <article class="card">
+            <div class="card-ico">📋</div>
+            <h3 class="text-base font-bold mb-1.5">Clipboard &amp; OSC 52</h3>
+            <p class="text-muted text-[14.5px]">Copy a single value or a whole environment — works over SSH and tmux too.</p>
+          </article>
+          <article class="card">
+            <div class="card-ico">📝</div>
+            <h3 class="text-base font-bold mb-1.5">Plain JSON store</h3>
+            <p class="text-muted text-[14.5px]">Human-readable, diffable, easy to back up. Key order is preserved so diffs stay clean.</p>
+          </article>
+        </div>
+      </div>
+    </section>
+
+    <!-- ───────────────────────── TUI / Demo ───────────────────────── -->
+    <section id="demo" class="py-[86px] bg-ink2 border-y border-line">
+      <div class="container-x grid lg:grid-cols-[1fr_1.15fr] gap-12 items-center">
+        <div>
+          <h2 class="text-[clamp(26px,3.5vw,34px)] font-extrabold tracking-tight mb-4">A TUI that feels like Telescope</h2>
+          <p class="text-muted text-[16.5px]">
+            Run <code class="chip-code">devsecrets</code> with no arguments. Projects and their
+            environments share one tree, so fuzzy navigation is instant. A match
+            on an environment keeps its project header visible; a match on a
+            project keeps all of its environments.
+          </p>
+          <ul class="list-none p-0 mt-5 grid gap-2.5">
+            <li class="text-muted text-[15px]"><kbd>/</kbd> Fuzzy-filter projects &amp; environments</li>
+            <li class="text-muted text-[15px]"><kbd>→</kbd> Expand a project / open an environment</li>
+            <li class="text-muted text-[15px]"><kbd>n</kbd> New environment or secret</li>
+            <li class="text-muted text-[15px]"><kbd>x</kbd> Export · <kbd>i</kbd> Import · <kbd>c</kbd> Copy</li>
+            <li class="text-muted text-[15px]"><kbd>s</kbd> Reveal / hide secret values</li>
+            <li class="text-muted text-[15px]"><kbd>?</kbd> Help overlay · <kbd>q</kbd> Quit</li>
+          </ul>
+        </div>
+        <div class="term">
+          <div class="term-bar">
+            <span class="term-dot bg-[#ff5f57]"></span>
+            <span class="term-dot bg-[#febc2e]"></span>
+            <span class="term-dot bg-[#28c840]"></span>
+            <span class="ml-2.5 font-mono text-[12px] text-faint">devsecrets — Secrets / api · dev</span>
+          </div>
+          <div class="p-4 overflow-x-auto">
+<pre class="term-screen text-[14px]">
+<span class="c-dim">╭─</span> <span class="c-violet">api / dev</span> <span class="c-dim">─────────────────────────────╮</span>
+<span class="c-dim">│</span> <span class="c-green">/</span> <span class="c-cursor animate-blink">▏</span>                                    <span class="c-dim">│</span>
+<span class="c-dim">├────────────────────────┬───────────────────┤</span>
+<span class="c-dim">│</span> <span class="c-sel">DB_HOST                </span><span class="c-dim">│</span> <span class="c-key">DB_HOST</span>           <span class="c-dim">│</span>
+<span class="c-dim">│</span> DB_PORT                 <span class="c-dim">│</span> <span class="c-dim">type:</span> text       <span class="c-dim">│</span>
+<span class="c-dim">│</span> URL <span class="c-ref">→ $ref:DB_HOST</span>     <span class="c-dim">│</span>                   <span class="c-dim">│</span>
+<span class="c-dim">│</span> API_KEY <span class="c-mask">••••••••</span>        <span class="c-dim">│</span> <span class="c-green">localhost</span>         <span class="c-dim">│</span>
+<span class="c-dim">│</span>                        <span class="c-dim">│</span>                   <span class="c-dim">│</span>
+<span class="c-dim">├────────────────────────┴───────────────────┤</span>
+<span class="c-dim">│</span> <span class="c-violet">e</span> edit  <span class="c-violet">g</span> goto ref  <span class="c-violet">s</span> reveal  <span class="c-violet">esc</span>  <span class="c-dim">│</span>
+<span class="c-dim">╰─────────────────────────────────────────────╯</span>
+</pre>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- ───────────────────────── Quick start ───────────────────────── -->
+    <section id="quickstart" class="py-[86px]">
+      <div class="container-x">
+        <div class="text-center max-w-2xl mx-auto mb-12">
+          <h2 class="text-[clamp(28px,4vw,38px)] font-extrabold tracking-tight">Quick start</h2>
+          <p class="text-muted text-[17px] mt-3">From zero to a loaded <code class="chip-code">.env</code> in three commands.</p>
+        </div>
+        <div class="grid md:grid-cols-3 gap-5">
+          <div class="card">
+            <div class="w-[34px] h-[34px] rounded-[9px] grid place-items-center font-extrabold text-[#06210f] mb-4" style="background:linear-gradient(135deg,var(--color-brand),var(--color-brand2));">1</div>
+            <h3 class="text-lg font-bold mb-1.5">Assign your folder</h3>
+            <p class="text-muted text-[14.5px] mb-3.5">A short wizard picks (or creates) a project and environment and remembers this folder.</p>
+            <pre class="block"><span class="c-dim"># in your project folder</span>
+<span class="c-green">$</span> cd ~/code/api
+<span class="c-green">$</span> devsecrets setup</pre>
+          </div>
+          <div class="card">
+            <div class="w-[34px] h-[34px] rounded-[9px] grid place-items-center font-extrabold text-[#06210f] mb-4" style="background:linear-gradient(135deg,var(--color-brand),var(--color-brand2));">2</div>
+            <h3 class="text-lg font-bold mb-1.5">Add some secrets</h3>
+            <p class="text-muted text-[14.5px] mb-3.5">Set values from the CLI — or press <kbd>n</kbd> in the TUI.</p>
+            <pre class="block"><span class="c-green">$</span> devsecrets secret set \
+    -p api -e dev DB_HOST localhost
+<span class="c-green">$</span> devsecrets secret set \
+    -p api -e dev DB_PORT 5432</pre>
+          </div>
+          <div class="card">
+            <div class="w-[34px] h-[34px] rounded-[9px] grid place-items-center font-extrabold text-[#06210f] mb-4" style="background:linear-gradient(135deg,var(--color-brand),var(--color-brand2));">3</div>
+            <h3 class="text-lg font-bold mb-1.5">Export on demand</h3>
+            <p class="text-muted text-[14.5px] mb-3.5">No flags needed — this folder is assigned, so export just knows.</p>
+            <pre class="block"><span class="c-green">$</span> devsecrets export .env
+<span class="c-dim"># writes this folder's env</span></pre>
+          </div>
+        </div>
+        <p class="text-center text-muted mt-8 text-base">…or just run <code class="chip-code">devsecrets</code> and do all of the above interactively.</p>
+      </div>
+    </section>
+
+    <!-- ───────────────────────── References ───────────────────────── -->
+    <section id="references" class="py-[86px] bg-ink2 border-y border-line">
+      <div class="container-x grid lg:grid-cols-[1fr_1.1fr] gap-12 items-center">
+        <div>
+          <h2 class="text-[clamp(26px,3.5vw,34px)] font-extrabold tracking-tight mb-4">References: share a value, store it once</h2>
+          <p class="text-muted text-[16.5px]">
+            A value can point at another secret, so a shared value lives in
+            exactly one place. Three forms, depending on how much context you
+            need — resolved relative to where the value lives.
+          </p>
+          <ul class="list-none p-0 mt-5 mb-4 grid gap-2.5">
+            <li class="flex items-center gap-3.5 flex-wrap"><code class="chip-code !text-amber !border-line2 !bg-surface">${SECRET}</code> <span class="text-muted text-[14.5px]">same project, same environment</span></li>
+            <li class="flex items-center gap-3.5 flex-wrap"><code class="chip-code !text-amber !border-line2 !bg-surface">${env.SECRET}</code> <span class="text-muted text-[14.5px]">same project, another environment</span></li>
+            <li class="flex items-center gap-3.5 flex-wrap"><code class="chip-code !text-amber !border-line2 !bg-surface">${project.env.SECRET}</code> <span class="text-muted text-[14.5px]">anywhere in the store</span></li>
+          </ul>
+          <p class="text-faint text-sm">Resolved at export time · nestable · cycles &amp; missing targets are detected.</p>
+        </div>
+        <pre class="block !text-[13.5px] !leading-[1.9] !px-6 !py-5"><span class="c-green">$</span> devsecrets secret set -p api -e dev  DB_HOST localhost
+<span class="c-green">$</span> devsecrets secret set -p api -e dev  URL <span class="c-str">'http://${DB_HOST}:5432'</span>
+<span class="c-green">$</span> devsecrets secret set -p api -e prod URL <span class="c-str">'https://${dev.DB_HOST}/api'</span>
+<span class="c-green">$</span> devsecrets secret set -p api -e dev  DSN <span class="c-str">'${infra.prod.DATABASE_URL}'</span>
+
+<span class="c-green">$</span> devsecrets secret get -p api -e dev URL
+<span class="c-dim">→</span> <span class="c-key">http://localhost:5432</span></pre>
+      </div>
+    </section>
+
+    <!-- ───────────────────────── Install ───────────────────────── -->
+    <section id="install" class="py-[86px]">
+      <div class="container-x">
+        <div class="text-center max-w-2xl mx-auto mb-12">
+          <h2 class="text-[clamp(28px,4vw,38px)] font-extrabold tracking-tight">Install</h2>
+          <p class="text-muted text-[17px] mt-3">A single self-contained binary called <code class="chip-code">devsecrets</code>. No system libraries, no runtime.</p>
+        </div>
+        <div class="grid md:grid-cols-3 gap-[18px]">
+          <div class="card">
+            <h3 class="text-[17px] font-bold mb-3.5 flex items-center gap-2">🍺 Homebrew
+              <span class="text-[10px] font-bold uppercase tracking-wide bg-brand/15 text-brand px-2 py-0.5 rounded-full">recommended</span>
+            </h3>
+            <div class="install !text-[13px]" data-copy="brew install peterkracik/tap/devsecrets">
+              <span class="text-brand font-bold">$</span>
+              <code class="install-cmd">brew install peterkracik/tap/devsecrets</code>
+              <button class="install-copy" type="button" aria-label="Copy command">Copy</button>
+            </div>
+            <p class="text-faint text-[13px] mt-3">macOS / Linux · upgrade with <code class="chip-code">brew upgrade devsecrets</code></p>
+          </div>
+
+          <div class="card">
+            <h3 class="text-[17px] font-bold mb-3.5 flex items-center gap-2">⬇️ Prebuilt binary</h3>
+            <div class="install !text-[13px]" data-copy="curl -L https://github.com/peterkracik/dev-secrets/releases/latest/download/devsecrets-x86_64-unknown-linux-gnu.tar.gz | tar xz">
+              <span class="text-brand font-bold">$</span>
+              <code class="install-cmd">curl -L …/releases/latest/…tar.gz | tar xz</code>
+              <button class="install-copy" type="button" aria-label="Copy command">Copy</button>
+            </div>
+            <p class="text-faint text-[13px] mt-3">Linux · macOS (Intel &amp; Apple Silicon) · Windows <code class="chip-code">.zip</code> on the <a class="text-cyan hover:underline" href="https://github.com/peterkracik/dev-secrets/releases" target="_blank" rel="noopener">Releases</a> page.</p>
+          </div>
+
+          <div class="card">
+            <h3 class="text-[17px] font-bold mb-3.5 flex items-center gap-2">🦀 From source (Cargo)</h3>
+            <div class="install !text-[13px]" data-copy="cargo install --git https://github.com/peterkracik/dev-secrets.git">
+              <span class="text-brand font-bold">$</span>
+              <code class="install-cmd">cargo install --git …/dev-secrets.git</code>
+              <button class="install-copy" type="button" aria-label="Copy command">Copy</button>
+            </div>
+            <p class="text-faint text-[13px] mt-3">Requires Rust 1.74+ — the only build dependency.</p>
+          </div>
+        </div>
+
+        <div class="flex gap-3.5 items-start bg-amber/[0.06] border border-amber/30 rounded-2xl px-5 py-4.5 mt-7">
+          <span class="text-[22px] leading-[1.4]">⚠️</span>
+          <p class="m-0 text-muted text-[15px]">
+            <strong class="text-amber">Not a secrets manager for production credentials.</strong>
+            The store is plain, human-readable JSON on your disk and is
+            <strong class="text-amber">not encrypted</strong>. Designed for local, non-sensitive
+            test values only (localhost URLs, dummy keys, dev ports). Don't put
+            real production secrets in here.
+          </p>
+        </div>
+      </div>
+    </section>
+
+    <!-- ───────────────────────── CTA ───────────────────────── -->
+    <section class="py-[86px] text-center">
+      <div class="container-x max-w-2xl">
+        <h2 class="text-[clamp(28px,4vw,40px)] font-extrabold tracking-tight">Stop hunting for the right <code class="text-cyan">.env</code>.</h2>
+        <p class="text-muted text-[17px] mt-3.5 mb-6">A tiny local tool, a fast TUI, and a CLI that scripts.</p>
+        <div class="flex gap-3 flex-wrap justify-center">
+          <a class="btn btn-primary" href="https://github.com/peterkracik/dev-secrets" target="_blank" rel="noopener">View on GitHub</a>
+          <a class="btn btn-ghost" href="#install">Install now</a>
+        </div>
+      </div>
+    </section>
+  </main>
+
+  <!-- ───────────────────────── Footer ───────────────────────── -->
+  <footer class="border-t border-line bg-ink2 py-10">
+    <div class="container-x flex items-center gap-6 flex-wrap">
+      <div class="flex items-center gap-2.5 font-bold">
+        <img src="favicon.svg" alt="" width="22" height="22" />
+        <span>dev-secrets</span>
+      </div>
+      <nav class="flex gap-6 ml-auto text-sm text-muted" aria-label="Footer">
+        <a class="hover:text-brand transition" href="https://github.com/peterkracik/dev-secrets" target="_blank" rel="noopener">GitHub</a>
+        <a class="hover:text-brand transition" href="https://github.com/peterkracik/dev-secrets#readme" target="_blank" rel="noopener">Docs</a>
+        <a class="hover:text-brand transition" href="https://github.com/peterkracik/dev-secrets/releases" target="_blank" rel="noopener">Releases</a>
+        <a class="hover:text-brand transition" href="https://github.com/peterkracik/dev-secrets/blob/main/LICENSE" target="_blank" rel="noopener">MIT License</a>
+      </nav>
+      <p class="text-faint text-[13px] w-full mt-1.5">Lightweight · local-first · written in Rust 🦀 · 🔭 Telescope-style</p>
+    </div>
+  </footer>
+
+  <script src="script.js" defer></script>
+</body>
+</html>
