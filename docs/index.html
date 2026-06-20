@@ -116,18 +116,26 @@
       </div>
     </section>
 
-    <!-- ───────────────────────── Heads-up warning (top, for clarity) ───────────────────────── -->
-    <section class="pt-0 pb-10">
+    <!-- ───────────────────────── Heads-up note (top, for clarity) ───────────────────────── -->
+    <section class="pt-0 pb-12">
       <div class="container-x">
-        <div class="flex gap-3.5 items-start bg-amber/[0.06] border border-amber/30 rounded-2xl px-5 py-4.5">
-          <span class="text-[22px] leading-[1.4]">⚠️</span>
-          <p class="m-0 text-muted text-[15px]">
-            <strong class="text-amber">For local development only — not a production secrets manager.</strong>
-            The store is plain, human-readable JSON on your disk and is
-            <strong class="text-amber">not encrypted</strong>. Use it for local, non-sensitive
-            test values only (localhost URLs, dummy keys, dev ports) — never real
-            production secrets.
-          </p>
+        <div class="flex items-start gap-4 bg-surface border border-line2 rounded-2xl px-5 py-5 sm:px-6">
+          <div class="shrink-0 w-11 h-11 rounded-xl grid place-items-center bg-cyan/10 border border-cyan/30">
+            <svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="var(--color-cyan)" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+              <rect x="4" y="10" width="16" height="10" rx="2" />
+              <path d="M8 10V7a4 4 0 0 1 8 0v3" />
+              <path d="M12 14v2" />
+            </svg>
+          </div>
+          <div>
+            <h3 class="font-bold text-fg text-[15.5px] mb-1">Built for local development — not a production secrets manager</h3>
+            <p class="m-0 text-muted text-[14.5px] leading-relaxed">
+              The store is plain, human-readable JSON on your disk and is
+              <span class="text-fg font-semibold">not encrypted</span>. Keep it to local,
+              non-sensitive test values — localhost URLs, dummy keys, dev ports — and
+              never real production credentials.
+            </p>
+          </div>
         </div>
       </div>
     </section>

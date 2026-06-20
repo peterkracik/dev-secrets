@@ -10,6 +10,11 @@
   <code>devsecrets</code> &nbsp;·&nbsp; written in Rust &nbsp;·&nbsp; TUI + scriptable CLI
 </p>
 
+<p align="center">
+  🌐 <a href="https://peterkracik.github.io/dev-secrets/"><strong>peterkracik.github.io/dev-secrets</strong></a>
+  &nbsp;·&nbsp; <a href="https://github.com/peterkracik/dev-secrets/releases">Releases</a>
+</p>
+
 ---
 
 ## What is this?
