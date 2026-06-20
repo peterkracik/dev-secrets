@@ -98,13 +98,13 @@
             <div class="p-4 overflow-x-auto">
 <pre class="term-screen">
 <span class="c-dim">╭─</span> <span class="c-violet">Secrets</span> <span class="c-dim">─────────────────────────────────────╮</span>
-<span class="c-dim">│</span> <span class="c-green">/</span> db<span class="c-cursor animate-blink">▏</span>                                         <span class="c-dim">│</span>
+<span class="c-dim">│</span> <span class="c-green">/</span> db<span class="c-cursor animate-blink">_</span>                                         <span class="c-dim">│</span>
 <span class="c-dim">├──────────────────────┬────────────────────────┤</span>
-<span class="c-dim">│</span><span class="c-sel"> ▾ api        (2 env) </span><span class="c-dim">│</span> <span class="c-key">DB_HOST</span> = localhost    <span class="c-dim">│</span>
-<span class="c-dim">│</span>   <span class="c-green">– dev ★</span>  3 keys    <span class="c-dim">│</span> <span class="c-key">DB_PORT</span> = 5432         <span class="c-dim">│</span>
-<span class="c-dim">│</span>   – prod   3 keys    <span class="c-dim">│</span> <span class="c-key">URL</span>     = <span class="c-ref">$ref:DB_HOST</span> <span class="c-dim">│</span>
-<span class="c-dim">│</span> ▸ web        (1 env) <span class="c-dim">│</span>                        <span class="c-dim">│</span>
-<span class="c-dim">│</span> ▸ infra      (3 env) <span class="c-dim">│</span><span class="c-dim"> preview · s reveals    </span><span class="c-dim">│</span>
+<span class="c-dim">│</span><span class="c-sel"> v api        (2 env) </span><span class="c-dim">│</span> <span class="c-key">DB_HOST</span> = localhost    <span class="c-dim">│</span>
+<span class="c-dim">│</span>   <span class="c-green">- dev *</span>  3 keys    <span class="c-dim">│</span> <span class="c-key">DB_PORT</span> = 5432         <span class="c-dim">│</span>
+<span class="c-dim">│</span>   - prod   3 keys    <span class="c-dim">│</span> <span class="c-key">URL</span>     = <span class="c-ref">$ref:DB_HOST</span> <span class="c-dim">│</span>
+<span class="c-dim">│</span> > web        (1 env) <span class="c-dim">│</span>                        <span class="c-dim">│</span>
+<span class="c-dim">│</span> > infra      (3 env) <span class="c-dim">│</span><span class="c-dim"> preview - s reveals    </span><span class="c-dim">│</span>
 <span class="c-dim">├──────────────────────┴────────────────────────┤</span>
 <span class="c-dim">│</span> <span class="c-green">/</span> filter  <span class="c-violet">n</span> new  <span class="c-violet">x</span> export  <span class="c-violet">?</span> help             <span class="c-dim">│</span>
 <span class="c-dim">╰───────────────────────────────────────────────╯</span>
@@ -112,6 +112,22 @@
             </div>
           </div>
           <p class="text-center text-faint text-[13px] mt-3.5">Centered, bounded floating window · fuzzy filter · live preview</p>
+        </div>
+      </div>
+    </section>
+
+    <!-- ───────────────────────── Heads-up warning (top, for clarity) ───────────────────────── -->
+    <section class="pt-0 pb-10">
+      <div class="container-x">
+        <div class="flex gap-3.5 items-start bg-amber/[0.06] border border-amber/30 rounded-2xl px-5 py-4.5">
+          <span class="text-[22px] leading-[1.4]">⚠️</span>
+          <p class="m-0 text-muted text-[15px]">
+            <strong class="text-amber">For local development only — not a production secrets manager.</strong>
+            The store is plain, human-readable JSON on your disk and is
+            <strong class="text-amber">not encrypted</strong>. Use it for local, non-sensitive
+            test values only (localhost URLs, dummy keys, dev ports) — never real
+            production secrets.
+          </p>
         </div>
       </div>
     </section>
@@ -286,16 +302,16 @@
           </div>
           <div class="p-4 overflow-x-auto">
 <pre class="term-screen text-[14px]">
-<span class="c-dim">╭─</span> <span class="c-violet">api / dev</span> <span class="c-dim">─────────────────────────────╮</span>
-<span class="c-dim">│</span> <span class="c-green">/</span> <span class="c-cursor animate-blink">▏</span>                                    <span class="c-dim">│</span>
-<span class="c-dim">├────────────────────────┬───────────────────┤</span>
-<span class="c-dim">│</span> <span class="c-sel">DB_HOST                </span><span class="c-dim">│</span> <span class="c-key">DB_HOST</span>           <span class="c-dim">│</span>
-<span class="c-dim">│</span> DB_PORT                 <span class="c-dim">│</span> <span class="c-dim">type:</span> text       <span class="c-dim">│</span>
-<span class="c-dim">│</span> URL <span class="c-ref">→ $ref:DB_HOST</span>     <span class="c-dim">│</span>                   <span class="c-dim">│</span>
-<span class="c-dim">│</span> API_KEY <span class="c-mask">••••••••</span>        <span class="c-dim">│</span> <span class="c-green">localhost</span>         <span class="c-dim">│</span>
-<span class="c-dim">│</span>                        <span class="c-dim">│</span>                   <span class="c-dim">│</span>
-<span class="c-dim">├────────────────────────┴───────────────────┤</span>
-<span class="c-dim">│</span> <span class="c-violet">e</span> edit  <span class="c-violet">g</span> goto ref  <span class="c-violet">s</span> reveal  <span class="c-violet">esc</span>  <span class="c-dim">│</span>
+<span class="c-dim">╭─</span> <span class="c-violet">api / dev</span> <span class="c-dim">─────────────────────────────────╮</span>
+<span class="c-dim">│</span> <span class="c-green">/</span> <span class="c-cursor animate-blink">_</span>                                         <span class="c-dim">│</span>
+<span class="c-dim">├──────────────────────┬──────────────────────┤</span>
+<span class="c-dim">│</span><span class="c-sel"> DB_HOST              </span><span class="c-dim">│</span> <span class="c-key">DB_HOST</span>              <span class="c-dim">│</span>
+<span class="c-dim">│</span> <span class="c-key">DB_PORT</span>              <span class="c-dim">│</span> <span class="c-dim">type:</span> text           <span class="c-dim">│</span>
+<span class="c-dim">│</span> <span class="c-key">URL</span> <span class="c-ref">-&gt; $ref:DB_HOST</span>  <span class="c-dim">│</span>                      <span class="c-dim">│</span>
+<span class="c-dim">│</span> API_KEY <span class="c-mask">********</span>     <span class="c-dim">│</span> <span class="c-green">localhost</span>            <span class="c-dim">│</span>
+<span class="c-dim">│</span>                      <span class="c-dim">│</span>                      <span class="c-dim">│</span>
+<span class="c-dim">├──────────────────────┴──────────────────────┤</span>
+<span class="c-dim">│</span> <span class="c-violet">e</span> edit  <span class="c-violet">g</span> goto ref  <span class="c-violet">s</span> reveal  <span class="c-violet">esc</span>           <span class="c-dim">│</span>
 <span class="c-dim">╰─────────────────────────────────────────────╯</span>
 </pre>
           </div>
@@ -406,17 +422,6 @@
             </div>
             <p class="text-faint text-[13px] mt-3">Requires Rust 1.74+ — the only build dependency.</p>
           </div>
-        </div>
-
-        <div class="flex gap-3.5 items-start bg-amber/[0.06] border border-amber/30 rounded-2xl px-5 py-4.5 mt-7">
-          <span class="text-[22px] leading-[1.4]">⚠️</span>
-          <p class="m-0 text-muted text-[15px]">
-            <strong class="text-amber">Not a secrets manager for production credentials.</strong>
-            The store is plain, human-readable JSON on your disk and is
-            <strong class="text-amber">not encrypted</strong>. Designed for local, non-sensitive
-            test values only (localhost URLs, dummy keys, dev ports). Don't put
-            real production secrets in here.
-          </p>
         </div>
       </div>
     </section>
