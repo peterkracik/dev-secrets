@@ -54,7 +54,7 @@
             <span class="w-2 h-2 rounded-full bg-brand shadow-[0_0_0_4px_rgba(74,222,128,.18)]"></span>
             Lightweight · local-first · written in Rust
           </span>
-          <h1 class="text-[clamp(34px,5vw,54px)] font-extrabold tracking-tight">
+          <h1 class="text-[clamp(34px,5vw,54px)] font-extrabold tracking-tight leading-[1.1]">
             Your dev secrets,<br />
             <span class="bg-gradient-to-r from-brand via-cyan to-violet bg-clip-text text-transparent">organized by project</span><br />
             — not scattered <code class="text-cyan text-[.82em]">.env</code> files.
@@ -97,17 +97,17 @@
             </div>
             <div class="p-4 overflow-x-auto">
 <pre class="term-screen">
-<span class="c-dim">╭─</span> <span class="c-violet">Secrets</span> <span class="c-dim">───────────────────────────────╮</span>
-<span class="c-dim">│</span> <span class="c-green">/</span> db<span class="c-cursor animate-blink">▏</span>                                  <span class="c-dim">│</span>
-<span class="c-dim">├──────────────────────┬─────────────────────┤</span>
-<span class="c-dim">│</span> <span class="c-sel">▾ api        (2 env) </span><span class="c-dim">│</span> <span class="c-key">DB_HOST</span> = localhost  <span class="c-dim">│</span>
-<span class="c-dim">│</span>   <span class="c-green">– dev ★</span>  3 keys     <span class="c-dim">│</span> <span class="c-key">DB_PORT</span> = 5432       <span class="c-dim">│</span>
-<span class="c-dim">│</span>   – prod   3 keys     <span class="c-dim">│</span> <span class="c-key">URL</span>     = <span class="c-ref">$ref:DB_HOST</span> <span class="c-dim">│</span>
-<span class="c-dim">│</span> ▸ web        (1 env) <span class="c-dim">│</span>                     <span class="c-dim">│</span>
-<span class="c-dim">│</span> ▸ infra      (3 env) <span class="c-dim">│</span> <span class="c-dim">preview · s reveals  </span><span class="c-dim">│</span>
-<span class="c-dim">├──────────────────────┴─────────────────────┤</span>
-<span class="c-dim">│</span> <span class="c-green">/</span> filter  <span class="c-violet">n</span> new  <span class="c-violet">x</span> export  <span class="c-violet">?</span> help    <span class="c-dim">│</span>
-<span class="c-dim">╰─────────────────────────────────────────────╯</span>
+<span class="c-dim">╭─</span> <span class="c-violet">Secrets</span> <span class="c-dim">─────────────────────────────────────╮</span>
+<span class="c-dim">│</span> <span class="c-green">/</span> db<span class="c-cursor animate-blink">▏</span>                                         <span class="c-dim">│</span>
+<span class="c-dim">├──────────────────────┬────────────────────────┤</span>
+<span class="c-dim">│</span><span class="c-sel"> ▾ api        (2 env) </span><span class="c-dim">│</span> <span class="c-key">DB_HOST</span> = localhost    <span class="c-dim">│</span>
+<span class="c-dim">│</span>   <span class="c-green">– dev ★</span>  3 keys    <span class="c-dim">│</span> <span class="c-key">DB_PORT</span> = 5432         <span class="c-dim">│</span>
+<span class="c-dim">│</span>   – prod   3 keys    <span class="c-dim">│</span> <span class="c-key">URL</span>     = <span class="c-ref">$ref:DB_HOST</span> <span class="c-dim">│</span>
+<span class="c-dim">│</span> ▸ web        (1 env) <span class="c-dim">│</span>                        <span class="c-dim">│</span>
+<span class="c-dim">│</span> ▸ infra      (3 env) <span class="c-dim">│</span><span class="c-dim"> preview · s reveals    </span><span class="c-dim">│</span>
+<span class="c-dim">├──────────────────────┴────────────────────────┤</span>
+<span class="c-dim">│</span> <span class="c-green">/</span> filter  <span class="c-violet">n</span> new  <span class="c-violet">x</span> export  <span class="c-violet">?</span> help             <span class="c-dim">│</span>
+<span class="c-dim">╰───────────────────────────────────────────────╯</span>
 </pre>
             </div>
           </div>
@@ -447,7 +447,7 @@
         <a class="hover:text-brand transition" href="https://github.com/peterkracik/dev-secrets/releases" target="_blank" rel="noopener">Releases</a>
         <a class="hover:text-brand transition" href="https://github.com/peterkracik/dev-secrets/blob/main/LICENSE" target="_blank" rel="noopener">MIT License</a>
       </nav>
-      <p class="text-faint text-[13px] w-full mt-1.5">Lightweight · local-first · written in Rust 🦀 · 🔭 Telescope-style</p>
+      <p class="text-faint text-[13px] w-full mt-1.5">Lightweight · local-first · written in Rust 🦀 · 🔭 Telescope-style · created by <a class="text-cyan hover:underline" href="https://kracik.sk" target="_blank" rel="noopener">pk</a></p>
     </div>
   </footer>
 
