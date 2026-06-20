@@ -198,10 +198,9 @@
       <div class="container-x">
         <div class="text-center max-w-2xl mx-auto mb-12">
           <h2 class="text-[clamp(28px,4vw,38px)] font-extrabold tracking-tight">See it in action</h2>
-          <p class="text-muted text-[17px] mt-3">A 60-second tour of organizing, referencing and exporting your dev secrets.</p>
+          <p class="text-muted text-[17px] mt-3">A 90-second tour of organizing, referencing and exporting your dev secrets.</p>
         </div>
 
-        <!-- Replace this placeholder with a <video> or asciinema/YouTube embed when ready. -->
         <figure class="max-w-4xl mx-auto m-0">
           <div class="term">
             <div class="term-bar">
@@ -210,17 +209,14 @@
               <span class="term-dot bg-[#28c840]"></span>
               <span class="ml-2.5 font-mono text-[12px] text-faint">devsecrets — demo</span>
             </div>
-            <div class="relative aspect-video grid place-items-center bg-[radial-gradient(circle_at_50%_40%,rgba(74,222,128,.08),transparent_60%)]">
-              <div class="text-center px-6">
-                <div class="mx-auto mb-5 w-[74px] h-[74px] rounded-full grid place-items-center bg-brand/15 border border-brand/40">
-                  <svg viewBox="0 0 24 24" width="30" height="30" aria-hidden="true">
-                    <path fill="var(--color-brand)" d="M8 5v14l11-7z" />
-                  </svg>
-                </div>
-                <p class="font-semibold text-fg text-lg">Demo video coming soon</p>
-                <p class="text-faint text-sm mt-1.5 font-mono">[ placeholder — drop a screen recording / asciinema cast here ]</p>
-              </div>
-            </div>
+            <video class="block w-full aspect-video bg-black" controls playsinline preload="metadata">
+              <source src="devsecrets.mov" type="video/mp4" />
+              <source src="devsecrets.mov" type="video/quicktime" />
+              <p class="text-center px-6 py-10 text-faint text-sm">
+                Your browser can't play this video —
+                <a class="text-cyan hover:underline" href="devsecrets.mov">download it instead</a>.
+              </p>
+            </video>
           </div>
           <figcaption class="text-center text-faint text-[13px] mt-3.5">
             Prefer text? Jump to the <a class="text-cyan hover:underline" href="#quickstart">quick start</a>.

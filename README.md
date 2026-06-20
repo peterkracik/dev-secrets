@@ -15,6 +15,10 @@
   &nbsp;·&nbsp; <a href="https://github.com/peterkracik/dev-secrets/releases">Releases</a>
 </p>
 
+<p align="center">
+  <img src="docs/devsecrets.gif" alt="dev-secrets terminal UI demo" width="800">
+</p>
+
 ---
 
 ## What is this?
