@@ -1,0 +1,14 @@
+{
+  "name": "dev-secrets-site",
+  "private": true,
+  "version": "0.1.0",
+  "description": "Landing page for dev-secrets (static, GitHub Pages).",
+  "scripts": {
+    "build": "tailwindcss -i ./src/input.css -o ./tailwind.css --minify",
+    "watch": "tailwindcss -i ./src/input.css -o ./tailwind.css --watch"
+  },
+  "devDependencies": {
+    "@tailwindcss/cli": "^4.1.0",
+    "tailwindcss": "^4.1.0"
+  }
+}
