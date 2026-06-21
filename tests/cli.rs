@@ -297,6 +297,73 @@ fn list_falls_back_to_folder_assignment() {
 }
 
 #[test]
+fn run_injects_secrets_into_command_env() {
+    let sb = Sandbox::new();
+    sb.ok(&["project", "create", "api"]);
+    sb.ok(&["env", "create", "-p", "api", "dev"]);
+    sb.ok(&[
+        "secret",
+        "set",
+        "-p",
+        "api",
+        "-e",
+        "dev",
+        "HOST",
+        "localhost",
+    ]);
+    // A reference is resolved before being injected.
+    sb.ok(&[
+        "secret",
+        "set",
+        "-p",
+        "api",
+        "-e",
+        "dev",
+        "URL",
+        "http://${HOST}:5432",
+    ]);
+
+    // The child process sees the resolved values in its environment.
+    let out = sb.ok(&[
+        "run",
+        "-p",
+        "api",
+        "-e",
+        "dev",
+        "--",
+        "sh",
+        "-c",
+        "echo $URL",
+    ]);
+    assert_eq!(out.trim(), "http://localhost:5432");
+
+    // The `exec` alias works too, and --raw keeps references literal.
+    let raw = sb.ok(&[
+        "exec",
+        "-p",
+        "api",
+        "-e",
+        "dev",
+        "--raw",
+        "--",
+        "sh",
+        "-c",
+        "echo $URL",
+    ]);
+    assert_eq!(raw.trim(), "http://${HOST}:5432");
+}
+
+#[test]
+fn run_propagates_command_exit_code() {
+    let sb = Sandbox::new();
+    sb.ok(&["project", "create", "api"]);
+    sb.ok(&["env", "create", "-p", "api", "dev"]);
+
+    let out = sb.run(&["run", "-p", "api", "-e", "dev", "--", "sh", "-c", "exit 3"]);
+    assert_eq!(out.status.code(), Some(3), "expected child's exit code");
+}
+
+#[test]
 fn duplicate_environment_copies_secrets() {
     let sb = Sandbox::new();
     sb.ok(&["project", "create", "api"]);

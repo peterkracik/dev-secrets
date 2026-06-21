@@ -64,6 +64,8 @@ it fits into scripts and Makefiles just as well as interactive use.
   duplicating it. Resolved (recursively, with cycle detection) on export.
 - 📌 **Folder assignments** — `devsecrets setup` binds a folder to a
   project/env, so `devsecrets export` (and the TUI) "just know" what to use.
+- 🚀 **Run with secrets** — `devsecrets run -- <cmd>` launches a command with
+  the environment's secrets injected as real env vars (no `.env` file needed).
 - 📋 **Clipboard** copy of a secret value or a whole environment.
 - 📝 **Plain JSON store** you can read, diff, and back up yourself.
 
@@ -455,6 +457,28 @@ devsecrets export .env -p api --raw
 
 `shell` is handy for `eval "$(devsecrets export --format shell)"`.
 
+### Run a command with secrets
+
+Launch any command with an environment's secrets injected straight into its
+environment — no `.env` file, no `eval`. The secrets are layered on top of the
+inherited environment, references are resolved (use `--raw` to keep them
+literal), and the command's own exit code is propagated.
+
+```sh
+# Use this folder's assigned project/env (after `devsecrets setup`)
+devsecrets run -- npm start
+
+# Or target a project/env explicitly
+devsecrets run -p api -e dev -- python app.py
+
+# `exec` is an alias; --raw injects unresolved ${...} values
+devsecrets exec -p api -e dev --raw -- ./script.sh
+```
+
+Put everything for the command **after `--`** so its own flags aren't mistaken
+for `devsecrets`' flags. This is the most direct way to "source" your secrets:
+the child process sees them as ordinary environment variables.
+
 ### Duplicate an environment
 
 ```sh
@@ -512,7 +536,24 @@ straight to the secret it points at.
 
 ---
 
-## Loading secrets into your shell (direnv)
+## Loading secrets into your shell
+
+### Run a command directly (no file, no shell hook)
+
+The simplest way to give a program its secrets is to launch it with
+`devsecrets run`, which injects the resolved values as environment variables
+for that one command:
+
+```sh
+devsecrets run -- npm start          # uses this folder's assigned project/env
+devsecrets run -p api -e dev -- ./server
+```
+
+Nothing is written to disk and nothing lingers in your shell — the variables
+exist only for the launched process. See
+[Run a command with secrets](#run-a-command-with-secrets) above for details.
+
+### direnv
 
 Because `devsecrets export` writes a standard `.env` (and, after
 `devsecrets setup`, needs no arguments inside an assigned folder), it drops

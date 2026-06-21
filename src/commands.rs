@@ -35,6 +35,12 @@ pub fn run(command: Command) -> Result<()> {
             format,
             raw,
         } => export(file, project, env, format, raw),
+        Command::Run {
+            project,
+            env,
+            raw,
+            command,
+        } => run_command(project, env, raw, command),
         Command::Duplicate { project, from, to } => duplicate(project, from, to),
         Command::List => list_all(),
     }
@@ -498,7 +504,71 @@ fn export(
     raw: bool,
 ) -> Result<()> {
     let handle = StoreHandle::open()?;
+    let (project, env_name, resolved) = resolve_env_values(&handle, project, env, raw)?;
 
+    // Choose the format: explicit flag, else the file extension, else env.
+    let fmt = format
+        .or_else(|| file.as_deref().and_then(format_from_path))
+        .unwrap_or(Format::Env);
+    let output = render(&resolved, fmt)?;
+
+    match file {
+        Some(path) => {
+            fs::write(&path, &output).with_context(|| format!("writing {}", path.display()))?;
+            eprintln!(
+                "Exported {} secrets from `{project}/{env_name}` to {}.",
+                resolved.len(),
+                path.display()
+            );
+        }
+        None => {
+            print!("{output}");
+        }
+    }
+    Ok(())
+}
+
+/// Run a command with an environment's secrets injected as environment
+/// variables. The child inherits the current environment with the secrets
+/// layered on top, then the command's own exit code is propagated.
+fn run_command(
+    project: Option<String>,
+    env: Option<String>,
+    raw: bool,
+    command: Vec<String>,
+) -> Result<()> {
+    let handle = StoreHandle::open()?;
+    let (project, env_name, resolved) = resolve_env_values(&handle, project, env, raw)?;
+
+    let (program, args) = command.split_first().context(
+        "no command given (usage: devsecrets run [-p <project>] [-e <env>] -- <command> [args...])",
+    )?;
+
+    // Note on stderr so stdout stays clean for the command's own output.
+    eprintln!(
+        "Running `{program}` with {} secret(s) from `{project}/{env_name}`.",
+        resolved.len()
+    );
+
+    let status = std::process::Command::new(program)
+        .args(args)
+        .envs(resolved)
+        .status()
+        .with_context(|| format!("failed to run `{program}`"))?;
+
+    // Propagate the command's exit code (128 + signal isn't portable; use 1).
+    std::process::exit(status.code().unwrap_or(1));
+}
+
+/// Resolve a (project, env) target and build its resolved key/value map,
+/// falling back to this folder's assignment when project/env are omitted.
+/// Shared by `export` and `run`. References are resolved unless `raw`.
+fn resolve_env_values(
+    handle: &StoreHandle,
+    project: Option<String>,
+    env: Option<String>,
+    raw: bool,
+) -> Result<(String, String, indexmap::IndexMap<String, String>)> {
     // Fall back to this folder's assignment for project/env when not given.
     let assignment = meta::load()?.get(&meta::current_dir()?).cloned();
 
@@ -530,7 +600,7 @@ fn export(
         })?;
     let environment = &proj.environments[&env_name];
 
-    // Build the output, resolving references unless --raw.
+    // Build the map, resolving references unless --raw.
     let mut resolved = indexmap::IndexMap::new();
     for key in environment.values.keys() {
         let value = if raw {
@@ -540,26 +610,7 @@ fn export(
         };
         resolved.insert(key.clone(), value);
     }
-    // Choose the format: explicit flag, else the file extension, else env.
-    let fmt = format
-        .or_else(|| file.as_deref().and_then(format_from_path))
-        .unwrap_or(Format::Env);
-    let output = render(&resolved, fmt)?;
-
-    match file {
-        Some(path) => {
-            fs::write(&path, &output).with_context(|| format!("writing {}", path.display()))?;
-            eprintln!(
-                "Exported {} secrets from `{project}/{env_name}` to {}.",
-                resolved.len(),
-                path.display()
-            );
-        }
-        None => {
-            print!("{output}");
-        }
-    }
-    Ok(())
+    Ok((project, env_name, resolved))
 }
 
 /// Guess an output format from a file extension.

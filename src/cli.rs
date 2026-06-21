@@ -122,6 +122,29 @@ pub enum Command {
         raw: bool,
     },
 
+    /// Run a command with an environment's secrets injected as variables.
+    ///
+    /// The secrets are added to the command's environment (on top of the
+    /// inherited one), so the program "just sees" them — no `.env` file or
+    /// manual `eval` needed. References are resolved unless `--raw`.
+    #[command(visible_alias = "exec")]
+    Run {
+        /// Project to source. Defaults to the project assigned to this folder.
+        #[arg(short, long)]
+        project: Option<String>,
+        /// Environment to source. Defaults to the folder's assigned env, then
+        /// the project's default env.
+        #[arg(short, long)]
+        env: Option<String>,
+        /// Inject raw values without resolving ${...} references.
+        #[arg(long)]
+        raw: bool,
+        /// The command to run, followed by its arguments (use `--` to separate
+        /// the command's own flags from devsecrets').
+        #[arg(trailing_var_arg = true, required = true)]
+        command: Vec<String>,
+    },
+
     /// Duplicate an environment within a project.
     Duplicate {
         #[arg(short, long)]
