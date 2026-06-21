@@ -541,8 +541,8 @@ Prefer not to write a file? Load straight from stdout instead:
 
 ```sh
 # .envrc
-set -a                       # export everything that follows
-eval "$(devsecrets export)"  # uses this folder's assigned project/env
+set -a                       # auto-export everything that follows
+eval "$(devsecrets export)"  # this folder's assigned project/env
 set +a
 ```
 
