@@ -297,6 +297,145 @@ fn list_falls_back_to_folder_assignment() {
 }
 
 #[test]
+fn run_injects_secrets_into_command_env() {
+    let sb = Sandbox::new();
+    sb.ok(&["project", "create", "api"]);
+    sb.ok(&["env", "create", "-p", "api", "dev"]);
+    sb.ok(&[
+        "secret",
+        "set",
+        "-p",
+        "api",
+        "-e",
+        "dev",
+        "HOST",
+        "localhost",
+    ]);
+    // A reference is resolved before being injected.
+    sb.ok(&[
+        "secret",
+        "set",
+        "-p",
+        "api",
+        "-e",
+        "dev",
+        "URL",
+        "http://${HOST}:5432",
+    ]);
+
+    // The child process sees the resolved values in its environment.
+    let out = sb.ok(&[
+        "run",
+        "-p",
+        "api",
+        "-e",
+        "dev",
+        "--",
+        "sh",
+        "-c",
+        "echo $URL",
+    ]);
+    assert_eq!(out.trim(), "http://localhost:5432");
+
+    // The `exec` alias works too, and --raw keeps references literal.
+    let raw = sb.ok(&[
+        "exec",
+        "-p",
+        "api",
+        "-e",
+        "dev",
+        "--raw",
+        "--",
+        "sh",
+        "-c",
+        "echo $URL",
+    ]);
+    assert_eq!(raw.trim(), "http://${HOST}:5432");
+}
+
+#[cfg(unix)]
+#[test]
+fn run_with_no_command_launches_shell_with_secrets() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let sb = Sandbox::new();
+    sb.ok(&["project", "create", "api"]);
+    sb.ok(&["env", "create", "-p", "api", "dev"]);
+    sb.ok(&["secret", "set", "-p", "api", "-e", "dev", "TOKEN", "abc123"]);
+
+    // A fake "$SHELL" that just prints a secret it was launched with, so we can
+    // confirm `run`/`exec` with no command starts $SHELL with the env loaded.
+    let shell = sb.tmp("fakeshell.sh");
+    std::fs::write(&shell, "#!/bin/sh\necho \"$TOKEN\"\n").unwrap();
+    std::fs::set_permissions(&shell, std::fs::Permissions::from_mode(0o755)).unwrap();
+
+    let out = Command::new(env!("CARGO_BIN_EXE_devsecrets"))
+        .args(["exec", "-p", "api", "-e", "dev"])
+        .env("XDG_CONFIG_HOME", &sb.dir)
+        .env("HOME", &sb.dir)
+        .env("SHELL", &shell)
+        .output()
+        .expect("failed to run devsecrets");
+    assert!(
+        out.status.success(),
+        "exec failed: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert_eq!(String::from_utf8(out.stdout).unwrap().trim(), "abc123");
+}
+
+#[cfg(unix)]
+#[test]
+fn shellenv_loads_secrets_into_current_shell() {
+    let sb = Sandbox::new();
+    sb.ok(&["project", "create", "api"]);
+    sb.ok(&["env", "create", "-p", "api", "dev"]);
+    sb.ok(&["secret", "set", "-p", "api", "-e", "dev", "TOKEN", "abc123"]);
+
+    // `shellenv` prints the `dsenv` function.
+    let snippet = sb.ok(&["shellenv"]);
+    assert!(snippet.contains("dsenv()"), "snippet was: {snippet}");
+
+    // Drive a real shell: install dsenv, load the secrets, then echo one. The
+    // echo runs in the same shell as dsenv, proving the value lands in the
+    // *current* shell rather than a child process.
+    let binexe = env!("CARGO_BIN_EXE_devsecrets");
+    let bindir = std::path::Path::new(binexe).parent().unwrap();
+    let script = "eval \"$(devsecrets shellenv)\"\ndsenv -p api -e dev\necho \"$TOKEN\"\n";
+    let out = Command::new("sh")
+        .arg("-c")
+        .arg(script)
+        .env("XDG_CONFIG_HOME", &sb.dir)
+        .env("HOME", &sb.dir)
+        .env(
+            "PATH",
+            format!(
+                "{}:{}",
+                bindir.display(),
+                std::env::var("PATH").unwrap_or_default()
+            ),
+        )
+        .output()
+        .expect("failed to run sh");
+    assert!(
+        out.status.success(),
+        "sh failed: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert_eq!(String::from_utf8(out.stdout).unwrap().trim(), "abc123");
+}
+
+#[test]
+fn run_propagates_command_exit_code() {
+    let sb = Sandbox::new();
+    sb.ok(&["project", "create", "api"]);
+    sb.ok(&["env", "create", "-p", "api", "dev"]);
+
+    let out = sb.run(&["run", "-p", "api", "-e", "dev", "--", "sh", "-c", "exit 3"]);
+    assert_eq!(out.status.code(), Some(3), "expected child's exit code");
+}
+
+#[test]
 fn duplicate_environment_copies_secrets() {
     let sb = Sandbox::new();
     sb.ok(&["project", "create", "api"]);

@@ -122,6 +122,41 @@ pub enum Command {
         raw: bool,
     },
 
+    /// Run a command with an environment's secrets injected as variables.
+    ///
+    /// The secrets are added to the command's environment (on top of the
+    /// inherited one), so the program "just sees" them — no `.env` file or
+    /// manual `eval` needed. References are resolved unless `--raw`.
+    ///
+    /// With no command, launches an interactive subshell (`$SHELL`) with the
+    /// secrets loaded, so you can run many commands without a prefix; `exit`
+    /// to leave.
+    #[command(visible_alias = "exec")]
+    Run {
+        /// Project to source. Defaults to the project assigned to this folder.
+        #[arg(short, long)]
+        project: Option<String>,
+        /// Environment to source. Defaults to the folder's assigned env, then
+        /// the project's default env.
+        #[arg(short, long)]
+        env: Option<String>,
+        /// Inject raw values without resolving ${...} references.
+        #[arg(long)]
+        raw: bool,
+        /// The command to run, followed by its arguments (use `--` to separate
+        /// the command's own flags from devsecrets'). Omit to open a subshell.
+        #[arg(trailing_var_arg = true)]
+        command: Vec<String>,
+    },
+
+    /// Print a shell function that loads secrets into your *current* shell.
+    ///
+    /// Add `eval "$(devsecrets shellenv)"` to your ~/.bashrc or ~/.zshrc; it
+    /// defines a `dsenv` function. Then run `dsenv` (optionally with -p/-e) to
+    /// load an environment's secrets into the shell you're in — every command
+    /// after it sees them, no per-command prefix needed.
+    Shellenv,
+
     /// Duplicate an environment within a project.
     Duplicate {
         #[arg(short, long)]

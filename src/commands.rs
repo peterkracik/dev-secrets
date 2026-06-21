@@ -35,6 +35,13 @@ pub fn run(command: Command) -> Result<()> {
             format,
             raw,
         } => export(file, project, env, format, raw),
+        Command::Run {
+            project,
+            env,
+            raw,
+            command,
+        } => run_command(project, env, raw, command),
+        Command::Shellenv => shellenv(),
         Command::Duplicate { project, from, to } => duplicate(project, from, to),
         Command::List => list_all(),
     }
@@ -498,7 +505,120 @@ fn export(
     raw: bool,
 ) -> Result<()> {
     let handle = StoreHandle::open()?;
+    let (project, env_name, resolved) = resolve_env_values(&handle, project, env, raw)?;
 
+    // Choose the format: explicit flag, else the file extension, else env.
+    let fmt = format
+        .or_else(|| file.as_deref().and_then(format_from_path))
+        .unwrap_or(Format::Env);
+    let output = render(&resolved, fmt)?;
+
+    match file {
+        Some(path) => {
+            fs::write(&path, &output).with_context(|| format!("writing {}", path.display()))?;
+            eprintln!(
+                "Exported {} secrets from `{project}/{env_name}` to {}.",
+                resolved.len(),
+                path.display()
+            );
+        }
+        None => {
+            print!("{output}");
+        }
+    }
+    Ok(())
+}
+
+/// Run a command with an environment's secrets injected as environment
+/// variables. The child inherits the current environment with the secrets
+/// layered on top, then the command's own exit code is propagated.
+fn run_command(
+    project: Option<String>,
+    env: Option<String>,
+    raw: bool,
+    command: Vec<String>,
+) -> Result<()> {
+    let handle = StoreHandle::open()?;
+    let (project, env_name, resolved) = resolve_env_values(&handle, project, env, raw)?;
+
+    // With no command, drop into an interactive subshell so the secrets are
+    // available to every command typed in it — no per-command prefix.
+    let interactive_shell = command.is_empty();
+    let command = if interactive_shell {
+        vec![default_shell()]
+    } else {
+        command
+    };
+    let (program, args) = command
+        .split_first()
+        .expect("command is non-empty (defaulted to a shell when omitted)");
+
+    // Note on stderr so stdout stays clean for the command's own output.
+    if interactive_shell {
+        eprintln!(
+            "Launching `{program}` with {} secret(s) from `{project}/{env_name}` \
+             (type `exit` to leave).",
+            resolved.len()
+        );
+    } else {
+        eprintln!(
+            "Running `{program}` with {} secret(s) from `{project}/{env_name}`.",
+            resolved.len()
+        );
+    }
+
+    let status = std::process::Command::new(program)
+        .args(args)
+        .envs(resolved)
+        .status()
+        .with_context(|| format!("failed to run `{program}`"))?;
+
+    // Propagate the command's exit code (128 + signal isn't portable; use 1).
+    std::process::exit(status.code().unwrap_or(1));
+}
+
+/// The user's preferred interactive shell, for `run` with no command.
+fn default_shell() -> String {
+    if cfg!(windows) {
+        std::env::var("COMSPEC").unwrap_or_else(|_| "cmd.exe".to_string())
+    } else {
+        std::env::var("SHELL").unwrap_or_else(|_| "/bin/sh".to_string())
+    }
+}
+
+/// A bash/zsh function that loads an environment's secrets into the *current*
+/// shell. Loading must happen in the user's shell (a child can't change its
+/// parent's environment), so this is eval'd into their shell from their rc
+/// file; `dsenv` then evaluates the `export …` lines from `export --format
+/// shell`. The intermediate variable + `|| return` keeps a failed export from
+/// being eval'd.
+const SHELLENV: &str = r#"# devsecrets shell integration — add to ~/.bashrc or ~/.zshrc:
+#   eval "$(devsecrets shellenv)"
+# Then load an environment's secrets into your current shell:
+#   dsenv                # this folder's assigned project/env
+#   dsenv -p api -e dev  # an explicit project/env
+dsenv() {
+    local _ds_out
+    _ds_out="$(command devsecrets export --format shell "$@")" || return $?
+    eval "$_ds_out"
+}
+"#;
+
+/// `devsecrets shellenv` — print the shell integration snippet.
+fn shellenv() -> Result<()> {
+    print!("{SHELLENV}");
+    Ok(())
+}
+
+/// Resolve a (project, env) target and build its resolved key/value map,
+/// falling back to this folder's assignment when project/env are omitted.
+/// Shared by `export` and `run`. References are resolved unless `raw`.
+fn resolve_env_values(
+    handle: &StoreHandle,
+    project: Option<String>,
+    env: Option<String>,
+    raw: bool,
+) -> Result<(String, String, indexmap::IndexMap<String, String>)> {
     // Fall back to this folder's assignment for project/env when not given.
     let assignment = meta::load()?.get(&meta::current_dir()?).cloned();
 
@@ -530,7 +650,7 @@ fn export(
         })?;
     let environment = &proj.environments[&env_name];
 
-    // Build the output, resolving references unless --raw.
+    // Build the map, resolving references unless --raw.
     let mut resolved = indexmap::IndexMap::new();
     for key in environment.values.keys() {
         let value = if raw {
@@ -540,26 +660,7 @@ fn export(
         };
         resolved.insert(key.clone(), value);
     }
-    // Choose the format: explicit flag, else the file extension, else env.
-    let fmt = format
-        .or_else(|| file.as_deref().and_then(format_from_path))
-        .unwrap_or(Format::Env);
-    let output = render(&resolved, fmt)?;
-
-    match file {
-        Some(path) => {
-            fs::write(&path, &output).with_context(|| format!("writing {}", path.display()))?;
-            eprintln!(
-                "Exported {} secrets from `{project}/{env_name}` to {}.",
-                resolved.len(),
-                path.display()
-            );
-        }
-        None => {
-            print!("{output}");
-        }
-    }
-    Ok(())
+    Ok((project, env_name, resolved))
 }
 
 /// Guess an output format from a file extension.
