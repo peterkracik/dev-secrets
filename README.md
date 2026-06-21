@@ -66,6 +66,8 @@ it fits into scripts and Makefiles just as well as interactive use.
   project/env, so `devsecrets export` (and the TUI) "just know" what to use.
 - 🚀 **Run with secrets** — `devsecrets run -- <cmd>` launches a command with
   the environment's secrets injected as real env vars (no `.env` file needed).
+- 🐚 **Load into your shell** — `eval "$(devsecrets shellenv)"` adds a `dsenv`
+  function that sources secrets into your current shell (no per-command prefix).
 - 📋 **Clipboard** copy of a secret value or a whole environment.
 - 📝 **Plain JSON store** you can read, diff, and back up yourself.
 
@@ -479,6 +481,37 @@ Put everything for the command **after `--`** so its own flags aren't mistaken
 for `devsecrets`' flags. This is the most direct way to "source" your secrets:
 the child process sees them as ordinary environment variables.
 
+**No command? Open a subshell.** Run `devsecrets run` (or `exec`) *without* a
+command and it launches your `$SHELL` with the secrets loaded, so you can run
+as many commands as you like without prefixing each one. Type `exit` (or
+`Ctrl-D`) to leave; the variables vanish with the subshell.
+
+```sh
+devsecrets exec -p api -e dev   # drops you into a shell with the secrets loaded
+# now just:
+npm start
+psql "$DATABASE_URL"
+exit                            # back to your normal shell, secrets gone
+```
+
+> Why a subshell? A program can't change the environment of the shell that
+> launched it, so `devsecrets` can't push variables into your *current* shell
+> from the outside. A subshell is the clean way to get a no-prefix session. If
+> you'd rather load them into the shell you're already in, use `dsenv` —
+> see [Loading secrets into your shell](#loading-secrets-into-your-shell).
+
+### Load secrets into your current shell
+
+Install the `dsenv` helper once, then load secrets into the shell you're in —
+no per-command prefix. See
+[Loading secrets into your shell](#into-your-current-shell-with-dsenv-no-per-command-prefix)
+for details.
+
+```sh
+eval "$(devsecrets shellenv)"   # add to ~/.bashrc or ~/.zshrc
+dsenv -p api -e dev             # load into the current shell
+```
+
 ### Duplicate an environment
 
 ```sh
@@ -537,6 +570,36 @@ straight to the secret it points at.
 ---
 
 ## Loading secrets into your shell
+
+### Into your current shell with `dsenv` (no per-command prefix)
+
+If you don't want to prefix every command, load the secrets **once** into your
+current shell and then run commands normally. A program can't change the
+environment of the shell that launched it, so the loading has to be done *by
+your shell* — `devsecrets shellenv` prints a tiny `dsenv` function that does
+exactly that. Install it once:
+
+```sh
+# ~/.bashrc or ~/.zshrc
+eval "$(devsecrets shellenv)"
+```
+
+Then, in any project folder:
+
+```sh
+dsenv                 # load this folder's assigned project/env
+dsenv -p api -e dev   # or an explicit project/env
+
+# from here on, no prefix — the variables are in your shell:
+npm start
+psql "$DATABASE_URL"
+```
+
+`dsenv` resolves references and exports each value into the current shell. It's
+just a wrapper around `eval "$(devsecrets export --format shell)"`, so you can
+also use that one-liner directly if you'd rather not install the function. The
+variables persist for the rest of that shell session (open a new shell, or
+`unset` them, to clear).
 
 ### Run a command directly (no file, no shell hook)
 

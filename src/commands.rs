@@ -41,6 +41,7 @@ pub fn run(command: Command) -> Result<()> {
             raw,
             command,
         } => run_command(project, env, raw, command),
+        Command::Shellenv => shellenv(),
         Command::Duplicate { project, from, to } => duplicate(project, from, to),
         Command::List => list_all(),
     }
@@ -540,15 +541,31 @@ fn run_command(
     let handle = StoreHandle::open()?;
     let (project, env_name, resolved) = resolve_env_values(&handle, project, env, raw)?;
 
-    let (program, args) = command.split_first().context(
-        "no command given (usage: devsecrets run [-p <project>] [-e <env>] -- <command> [args...])",
-    )?;
+    // With no command, drop into an interactive subshell so the secrets are
+    // available to every command typed in it — no per-command prefix.
+    let interactive_shell = command.is_empty();
+    let command = if interactive_shell {
+        vec![default_shell()]
+    } else {
+        command
+    };
+    let (program, args) = command
+        .split_first()
+        .expect("command is non-empty (defaulted to a shell when omitted)");
 
     // Note on stderr so stdout stays clean for the command's own output.
-    eprintln!(
-        "Running `{program}` with {} secret(s) from `{project}/{env_name}`.",
-        resolved.len()
-    );
+    if interactive_shell {
+        eprintln!(
+            "Launching `{program}` with {} secret(s) from `{project}/{env_name}` \
+             (type `exit` to leave).",
+            resolved.len()
+        );
+    } else {
+        eprintln!(
+            "Running `{program}` with {} secret(s) from `{project}/{env_name}`.",
+            resolved.len()
+        );
+    }
 
     let status = std::process::Command::new(program)
         .args(args)
@@ -558,6 +575,39 @@ fn run_command(
 
     // Propagate the command's exit code (128 + signal isn't portable; use 1).
     std::process::exit(status.code().unwrap_or(1));
+}
+
+/// The user's preferred interactive shell, for `run` with no command.
+fn default_shell() -> String {
+    if cfg!(windows) {
+        std::env::var("COMSPEC").unwrap_or_else(|_| "cmd.exe".to_string())
+    } else {
+        std::env::var("SHELL").unwrap_or_else(|_| "/bin/sh".to_string())
+    }
+}
+
+/// A bash/zsh function that loads an environment's secrets into the *current*
+/// shell. Loading must happen in the user's shell (a child can't change its
+/// parent's environment), so this is eval'd into their shell from their rc
+/// file; `dsenv` then evaluates the `export …` lines from `export --format
+/// shell`. The intermediate variable + `|| return` keeps a failed export from
+/// being eval'd.
+const SHELLENV: &str = r#"# devsecrets shell integration — add to ~/.bashrc or ~/.zshrc:
+#   eval "$(devsecrets shellenv)"
+# Then load an environment's secrets into your current shell:
+#   dsenv                # this folder's assigned project/env
+#   dsenv -p api -e dev  # an explicit project/env
+dsenv() {
+    local _ds_out
+    _ds_out="$(command devsecrets export --format shell "$@")" || return $?
+    eval "$_ds_out"
+}
+"#;
+
+/// `devsecrets shellenv` — print the shell integration snippet.
+fn shellenv() -> Result<()> {
+    print!("{SHELLENV}");
+    Ok(())
 }
 
 /// Resolve a (project, env) target and build its resolved key/value map,
